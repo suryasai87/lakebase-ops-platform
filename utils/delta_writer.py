@@ -314,10 +314,13 @@ class DeltaWriter:
         table_name = DELTA_TABLES.get(table_key, f"{OPS_CATALOG}.{OPS_SCHEMA}.{table_key}")
         now = datetime.now(timezone.utc).isoformat()
 
-        # Add timestamp to each record
-        for record in records:
-            if "snapshot_timestamp" not in record:
-                record["snapshot_timestamp"] = now
+        # Add snapshot_timestamp only for tables that have it
+        # (pg_stat_history, lakebase_metrics). Other tables use their own timestamp columns.
+        tables_with_snapshot_ts = {"pg_stat_history", "lakebase_metrics"}
+        if any(t in table_name for t in tables_with_snapshot_ts):
+            for record in records:
+                if "snapshot_timestamp" not in record:
+                    record["snapshot_timestamp"] = now
 
         write_entry = {
             "table": table_name,
