@@ -164,15 +164,22 @@ class IndexRecommendation:
     requires_approval: bool = True
 
 
+# Workspace defaults
+WORKSPACE_HOST = "fe-vm-hls-amer.cloud.databricks.com"
+DEFAULT_CATALOG = "hls_amer_catalog"
+OPS_CATALOG = "hls_amer_catalog"  # Using hls_amer_catalog (ops_catalog requires managed storage)
+OPS_SCHEMA = "lakebase_ops"
+ARCHIVE_SCHEMA = "lakebase_archive"
+
 # Delta table destinations for operational data
 DELTA_TABLES = {
-    "pg_stat_history": "ops_catalog.lakebase_ops.pg_stat_history",
-    "index_recommendations": "ops_catalog.lakebase_ops.index_recommendations",
-    "vacuum_history": "ops_catalog.lakebase_ops.vacuum_history",
-    "lakebase_metrics": "ops_catalog.lakebase_ops.lakebase_metrics",
-    "sync_validation": "ops_catalog.lakebase_ops.sync_validation_history",
-    "branch_lifecycle": "ops_catalog.lakebase_ops.branch_lifecycle",
-    "data_archival": "ops_catalog.lakebase_ops.data_archival_history",
+    "pg_stat_history": f"{OPS_CATALOG}.{OPS_SCHEMA}.pg_stat_history",
+    "index_recommendations": f"{OPS_CATALOG}.{OPS_SCHEMA}.index_recommendations",
+    "vacuum_history": f"{OPS_CATALOG}.{OPS_SCHEMA}.vacuum_history",
+    "lakebase_metrics": f"{OPS_CATALOG}.{OPS_SCHEMA}.lakebase_metrics",
+    "sync_validation": f"{OPS_CATALOG}.{OPS_SCHEMA}.sync_validation_history",
+    "branch_lifecycle": f"{OPS_CATALOG}.{OPS_SCHEMA}.branch_lifecycle",
+    "data_archival": f"{OPS_CATALOG}.{OPS_SCHEMA}.data_archival_history",
 }
 
 # Job schedules
@@ -187,9 +194,25 @@ JOB_SCHEDULES = {
     "cost_tracker": "0 6 * * *",            # Daily 6 AM
 }
 
-# Workspace defaults
-WORKSPACE_HOST = "fe-vm-hls-amer.cloud.databricks.com"
-DEFAULT_CATALOG = "hls_amer_catalog"
-OPS_CATALOG = "ops_catalog"
-OPS_SCHEMA = "lakebase_ops"
-ARCHIVE_SCHEMA = "lakebase_archive"
+# Real Lakebase infrastructure (discovered)
+LAKEBASE_PROJECT_ID = "83eb266d-27f8-4467-a7df-2b048eff09d7"
+LAKEBASE_PROJECT_NAME = "surya_lakebase_auto"
+LAKEBASE_DEFAULT_BRANCH = "br-shiny-math-d28d0cd4"
+LAKEBASE_ENDPOINT_HOST = "ep-hidden-haze-d2v9brhq.database.us-east-1.cloud.databricks.com"
+LAKEBASE_ENDPOINT_PORT = 5432
+LAKEBASE_DB_NAME = "databricks_postgres"
+LAKEBASE_PG_VERSION = 17
+LAKEBASE_CU_RANGE = (8, 16)
+
+# SQL Warehouse for DDL/DML execution
+SQL_WAREHOUSE_ID = "8e4258d7fe74671b"
+SQL_WAREHOUSE_NAME = "Serverless Demo"
+
+# Branch naming for test environment
+TEST_BRANCHES = {
+    "staging": {"source": LAKEBASE_DEFAULT_BRANCH, "ttl": None, "protected": True},
+    "development": {"source": LAKEBASE_DEFAULT_BRANCH, "ttl": 604800, "protected": False},
+    "ci-pr-1": {"source": LAKEBASE_DEFAULT_BRANCH, "ttl": 14400, "protected": False},
+    "feat-perf-test": {"source": LAKEBASE_DEFAULT_BRANCH, "ttl": 604800, "protected": False},
+    "dev-surya": {"source": LAKEBASE_DEFAULT_BRANCH, "ttl": 604800, "protected": False},
+}

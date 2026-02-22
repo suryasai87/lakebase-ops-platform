@@ -3,14 +3,16 @@ LakebaseClient: OAuth-aware PostgreSQL client for Lakebase connections.
 
 Handles:
 - OAuth token generation and automatic refresh (50 min / 1h expiry)
-- Scale-to-zero graceful degradation
 - Connection pooling with recycle at 3600s
 - Branch endpoint resolution
+- REST API operations for Lakebase project/branch management (no SDK needed)
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -91,7 +93,7 @@ class LakebaseClient:
     def get_connection(self, project_id: str, branch_id: str) -> Any:
         """
         Get a database connection to a Lakebase branch.
-        Handles OAuth refresh and scale-to-zero gracefully.
+        Handles OAuth refresh transparently.
         """
         endpoint_name = f"projects/{project_id}/branches/{branch_id}/endpoints/default"
         conn_key = f"{project_id}/{branch_id}"
@@ -124,9 +126,7 @@ class LakebaseClient:
             self._connections[conn_key] = conn
             return conn
         except Exception as e:
-            if "scale-to-zero" in str(e).lower() or "unavailable" in str(e).lower():
-                logger.warning(f"Branch {branch_id} is scaled to zero, skipping")
-                return None
+            logger.error(f"Connection to branch {branch_id} failed: {e}")
             raise
 
     def execute_query(self, project_id: str, branch_id: str, query: str, params: tuple = None) -> list[dict]:
@@ -248,6 +248,107 @@ class LakebaseClient:
         )
         return True
 
+    # --- REST API Methods (no SDK needed) ---
+
+    def _get_databricks_token(self) -> str:
+        """Get Databricks OAuth token via CLI."""
+        try:
+            result = subprocess.run(
+                ["databricks", "auth", "token", "--profile", "DEFAULT", "--host",
+                 f"https://{self.workspace_host}"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                return data.get("access_token", data.get("token_value", ""))
+        except Exception as e:
+            logger.warning(f"Failed to get token via CLI: {e}")
+        return ""
+
+    def _api_request(self, method: str, path: str, body: dict = None) -> dict:
+        """Make a REST API request to the Databricks workspace."""
+        import requests
+        token = self._get_databricks_token()
+        url = f"https://{self.workspace_host}{path}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+        resp = requests.request(method, url, headers=headers, json=body, timeout=60)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+
+    def _sql_api_execute(self, statement: str, warehouse_id: str,
+                         wait_timeout: str = "30s") -> dict:
+        """Execute a SQL statement via the Statement Execution API."""
+        body = {
+            "warehouse_id": warehouse_id,
+            "statement": statement,
+            "wait_timeout": wait_timeout,
+            "disposition": "INLINE",
+            "format": "JSON_ARRAY",
+        }
+        return self._api_request("POST", "/api/2.0/sql/statements", body)
+
+    def api_list_branches(self, project_id: str) -> list[dict]:
+        """List Lakebase branches via REST API."""
+        if self.mock_mode:
+            return self.list_branches(project_id)
+        path = f"/api/2.0/postgres/projects/{project_id}/branches"
+        resp = self._api_request("GET", path)
+        return resp.get("branches", [])
+
+    def api_create_branch(self, project_id: str, branch_name: str,
+                          source_branch_id: str, ttl_seconds: Optional[int] = None) -> dict:
+        """Create a Lakebase branch via REST API."""
+        if self.mock_mode:
+            return self.create_branch(project_id, branch_name, source_branch_id, ttl_seconds)
+        body: dict[str, Any] = {
+            "name": branch_name,
+            "parent_branch_id": source_branch_id,
+        }
+        if ttl_seconds is not None:
+            body["auto_delete_duration"] = f"{ttl_seconds}s"
+        path = f"/api/2.0/postgres/projects/{project_id}/branches"
+        return self._api_request("POST", path, body)
+
+    def api_delete_branch(self, project_id: str, branch_id: str) -> dict:
+        """Delete a Lakebase branch via REST API."""
+        if self.mock_mode:
+            return {"deleted": self.delete_branch(project_id, branch_id)}
+        path = f"/api/2.0/postgres/projects/{project_id}/branches/{branch_id}"
+        return self._api_request("DELETE", path)
+
+    def api_get_branch(self, project_id: str, branch_id: str) -> dict:
+        """Get branch details via REST API."""
+        if self.mock_mode:
+            return {"name": branch_id, "status": "ACTIVE"}
+        path = f"/api/2.0/postgres/projects/{project_id}/branches/{branch_id}"
+        return self._api_request("GET", path)
+
+    def api_generate_db_credential(self, endpoint_id: str) -> str:
+        """Generate OAuth database credential for Lakebase endpoint via REST API."""
+        if self.mock_mode:
+            return f"mock_db_cred_{int(time.time())}"
+        body = {"endpoint_id": endpoint_id}
+        resp = self._api_request("POST", "/api/2.0/postgres/credentials/generate", body)
+        return resp.get("password", resp.get("token", ""))
+
+    def get_pg_connection(self, host: str, password: str, port: int = 5432,
+                          dbname: str = "databricks_postgres") -> Any:
+        """Get a direct psycopg connection using host + OAuth password."""
+        import psycopg
+        conn = psycopg.connect(
+            host=host,
+            port=port,
+            dbname=dbname,
+            user="databricks",
+            password=password,
+            sslmode="require",
+            options="-c statement_timeout=300000",
+        )
+        return conn
+
     def close_all(self):
         """Close all connections."""
         for key, conn in self._connections.items():
@@ -276,20 +377,32 @@ class MockConnection:
                     "queryid": 1001, "query": "SELECT * FROM orders WHERE customer_id = $1",
                     "calls": 15000, "total_exec_time": 45000.0, "mean_exec_time": 3.0,
                     "rows": 75000, "shared_blks_hit": 500000, "shared_blks_read": 5000,
-                    "temp_blks_written": 0,
+                    "temp_blks_written": 0, "temp_blks_read": 0,
+                    "wal_records": 0, "wal_fpi": 0, "wal_bytes": 0,
+                    "jit_functions": 0, "jit_generation_time": 0.0,
+                    "jit_inlining_time": 0.0, "jit_optimization_time": 0.0, "jit_emission_time": 0.0,
                 },
                 {
                     "queryid": 1002, "query": "INSERT INTO events (type, data) VALUES ($1, $2)",
                     "calls": 50000, "total_exec_time": 25000.0, "mean_exec_time": 0.5,
                     "rows": 50000, "shared_blks_hit": 200000, "shared_blks_read": 1000,
-                    "temp_blks_written": 100,
+                    "temp_blks_written": 100, "temp_blks_read": 50,
+                    "wal_records": 50000, "wal_fpi": 500, "wal_bytes": 25600000,
+                    "jit_functions": 0, "jit_generation_time": 0.0,
+                    "jit_inlining_time": 0.0, "jit_optimization_time": 0.0, "jit_emission_time": 0.0,
                 },
                 {
                     "queryid": 1003, "query": "SELECT o.*, p.name FROM orders o JOIN products p ON o.product_id = p.id WHERE o.status = $1",
                     "calls": 8000, "total_exec_time": 160000.0, "mean_exec_time": 20.0,
                     "rows": 40000, "shared_blks_hit": 300000, "shared_blks_read": 50000,
-                    "temp_blks_written": 5000,
+                    "temp_blks_written": 5000, "temp_blks_read": 3000,
+                    "wal_records": 0, "wal_fpi": 0, "wal_bytes": 0,
+                    "jit_functions": 12, "jit_generation_time": 5.2,
+                    "jit_inlining_time": 3.1, "jit_optimization_time": 8.4, "jit_emission_time": 2.7,
                 },
+            ],
+            "pg_stat_statements_info": [
+                {"dealloc": 42, "stats_reset": "2026-01-15 00:00:00"},
             ],
             "pg_stat_user_tables": [
                 {
@@ -344,6 +457,57 @@ class MockConnection:
             "pg_locks": [
                 {"pid": 103, "locktype": "relation", "mode": "RowExclusiveLock", "granted": True, "waitstart": None},
             ],
+            "pg_stat_io": [
+                {
+                    "backend_type": "client backend", "object": "relation", "context": "normal",
+                    "reads": 150000, "read_time": 4500.0, "writes": 80000, "write_time": 2400.0,
+                    "hits": 9800000, "evictions": 5000, "fsyncs": 200, "fsync_time": 150.0,
+                },
+                {
+                    "backend_type": "autovacuum worker", "object": "relation", "context": "vacuum",
+                    "reads": 50000, "read_time": 1200.0, "writes": 30000, "write_time": 900.0,
+                    "hits": 2000000, "evictions": 1000, "fsyncs": 50, "fsync_time": 30.0,
+                },
+            ],
+            "pg_stat_wal": [
+                {
+                    "wal_records": 12500000, "wal_fpi": 125000, "wal_bytes": 6400000000,
+                    "wal_buffers_full": 50, "wal_write": 500000, "wal_sync": 450000,
+                    "wal_write_time": 12000.0, "wal_sync_time": 8000.0, "stats_reset": "2026-02-01 00:00:00",
+                },
+            ],
+            "pg_stat_checkpointer": [
+                {
+                    "num_timed": 120, "num_requested": 5, "write_time": 45000.0,
+                    "sync_time": 12000.0, "buffers_written": 500000, "stats_reset": "2026-02-01 00:00:00",
+                },
+            ],
+            "pg_catalog.pg_class": [
+                {"table_name": "orders", "column_name": "id", "data_type": "integer", "ordinal_position": 1, "not_null": True, "column_default": "nextval('orders_id_seq'::regclass)"},
+                {"table_name": "orders", "column_name": "customer_id", "data_type": "integer", "ordinal_position": 2, "not_null": True, "column_default": None},
+                {"table_name": "orders", "column_name": "product_id", "data_type": "integer", "ordinal_position": 3, "not_null": True, "column_default": None},
+                {"table_name": "orders", "column_name": "status", "data_type": "character varying(50)", "ordinal_position": 4, "not_null": False, "column_default": "'pending'::character varying"},
+                {"table_name": "orders", "column_name": "created_at", "data_type": "timestamp with time zone", "ordinal_position": 5, "not_null": False, "column_default": "now()"},
+                {"table_name": "events", "column_name": "id", "data_type": "integer", "ordinal_position": 1, "not_null": True, "column_default": "nextval('events_id_seq'::regclass)"},
+                {"table_name": "events", "column_name": "type", "data_type": "character varying(100)", "ordinal_position": 2, "not_null": True, "column_default": None},
+                {"table_name": "events", "column_name": "data", "data_type": "jsonb", "ordinal_position": 3, "not_null": False, "column_default": None},
+                {"table_name": "users", "column_name": "id", "data_type": "integer", "ordinal_position": 1, "not_null": True, "column_default": "nextval('users_id_seq'::regclass)"},
+                {"table_name": "users", "column_name": "email", "data_type": "character varying(255)", "ordinal_position": 2, "not_null": True, "column_default": None},
+            ],
+            "pg_catalog.pg_index": [
+                {
+                    "table_name": "orders", "index_a": "idx_orders_customer_id", "index_b": "idx_orders_cust_id_v2",
+                    "columns_a": "customer_id", "columns_b": "customer_id",
+                    "size_a": 104857600, "size_b": 104857600,
+                },
+            ],
+            "pg_catalog.pg_constraint": [
+                {
+                    "table_name": "orders", "conname": "fk_orders_customer",
+                    "column_name": "customer_id", "referenced_table": "users",
+                    "has_index": False,
+                },
+            ],
             "row_counts": {"orders": 5000000, "events": 20000000, "users": 100000},
             "max_timestamps": {"orders": "2026-02-21 14:30:00", "events": "2026-02-21 14:31:00"},
         }
@@ -351,7 +515,9 @@ class MockConnection:
     def execute_mock(self, query: str) -> list[dict]:
         """Return mock data based on the query pattern."""
         q = query.lower()
-        if "pg_stat_statements" in q:
+        if "pg_stat_statements_info" in q:
+            return self._mock_data["pg_stat_statements_info"]
+        elif "pg_stat_statements" in q:
             return self._mock_data["pg_stat_statements"]
         elif "pg_stat_user_indexes" in q:
             return self._mock_data["pg_stat_user_indexes"]
@@ -361,8 +527,20 @@ class MockConnection:
             return self._mock_data["pg_stat_activity"]
         elif "pg_stat_database" in q or "pg_database" in q:
             return self._mock_data["pg_stat_database"]
+        elif "pg_stat_io" in q:
+            return self._mock_data["pg_stat_io"]
+        elif "pg_stat_wal" in q:
+            return self._mock_data["pg_stat_wal"]
+        elif "pg_stat_checkpointer" in q:
+            return self._mock_data["pg_stat_checkpointer"]
         elif "pg_locks" in q:
             return self._mock_data["pg_locks"]
+        elif "pg_catalog.pg_index" in q or ("pg_index" in q and "pg_index a" in q):
+            return self._mock_data["pg_catalog.pg_index"]
+        elif "pg_catalog.pg_constraint" in q or "pg_constraint" in q:
+            return self._mock_data["pg_catalog.pg_constraint"]
+        elif "pg_catalog.pg_class" in q or ("pg_class" in q and "pg_attribute" in q):
+            return self._mock_data["pg_catalog.pg_class"]
         elif "count" in q:
             table = "orders"
             for t in ["orders", "events", "users"]:

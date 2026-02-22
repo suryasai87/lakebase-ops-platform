@@ -26,9 +26,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from framework.agent_framework import AgentFramework, EventType
-from agents.provisioning_agent import ProvisioningAgent
-from agents.performance_agent import PerformanceAgent
-from agents.health_agent import HealthAgent
+from agents import ProvisioningAgent, PerformanceAgent, HealthAgent
 from utils.lakebase_client import LakebaseClient
 from utils.delta_writer import DeltaWriter
 from utils.alerting import AlertManager, AlertChannel

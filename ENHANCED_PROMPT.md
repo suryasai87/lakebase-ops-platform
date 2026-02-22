@@ -10,7 +10,7 @@ You are an expert AI Architect specializing in designing and implementing autono
 
 The system must address the following core problems:
 - **pg_cron is NOT available** in Lakebase — all scheduling must use Databricks Jobs
-- **pg_stat_statements data is lost on scale-to-zero** — performance history requires external persistence
+- **pg_stat_statements is persistent in PG15+** but Delta enables 90-day historical trending, cross-branch comparison, and AI/BI dashboards
 - **No built-in CDC sync** — OLTP-to-OLAP validation must be implemented
 - **DBAs spend 60%+ of time on routine tasks** — vacuum tuning, index management, performance triage, backup validation
 - **Average MTTR is 4+ hours** for preventable database incidents with manual observation
@@ -155,17 +155,17 @@ All operational data persists in Unity Catalog under `ops_catalog.lakebase_ops`:
 
 ### Agent 2: Performance & Optimization Agent
 
-**Core Mission:** Address performance issues by proactively analyzing query patterns, indexing, and runtime configurations. Persist critical metrics that would otherwise be lost on scale-to-zero.
+**Core Mission:** Address performance issues by proactively analyzing query patterns, indexing, and runtime configurations. Persist metrics to Delta for 90-day historical trending and cross-branch comparison.
 
 **Automation Targets from PRD:**
 
 #### FR-01: pg_stat_statements Persistence Engine
 - Capture ALL columns from pg_stat_statements every 5 minutes
 - Persist to `ops_catalog.lakebase_ops.pg_stat_history`
-- Include metadata: project_id, branch_id, snapshot_timestamp, compute_status
+- Capture PG17 extended columns: temp_blks_read, wal_records, wal_fpi, wal_bytes, jit_functions, jit_generation_time, jit_inlining_time, jit_optimization_time, jit_emission_time
+- Include metadata: project_id, branch_id, snapshot_timestamp
 - Retain 90 days with automatic partition management
 - Handle OAuth token refresh (1-hour expiry)
-- Gracefully handle scale-to-zero without job failure
 
 #### FR-02: Automated Index Health Manager
 - **Unused indexes:** idx_scan = 0 for 7+ days (excluding PK/unique)
@@ -309,7 +309,7 @@ All operational data persists in Unity Catalog under `ops_catalog.lakebase_ops`:
 | NFR-07 | Cost overhead | Monitoring infrastructure < 5% of total Lakebase cost |
 | NFR-08 | Security | All connections use OAuth; no static passwords |
 | NFR-09 | Audit trail | All automated actions logged with actor, timestamp, reason |
-| NFR-10 | Graceful degradation | Handle scale-to-zero without cascading failures |
+| NFR-10 | Graceful degradation | Handle transient connection errors without cascading failures |
 
 ---
 
@@ -324,7 +324,7 @@ All operational data persists in Unity Catalog under `ops_catalog.lakebase_ops`:
 | OLTP-to-OLAP sync coverage | 0% (ad-hoc) | 100% configured | 100% |
 | Index recommendation accuracy | N/A | > 80% accepted | > 90% |
 | Orphaned branch count | Unknown | 0 (TTL enforced) | 0 |
-| pg_stat_statements retention | 0 (lost) | 90 days | 365 days |
+| pg_stat Delta retention | 0 days (no Delta) | 90 days | 365 days |
 
 ---
 
@@ -346,7 +346,7 @@ All operational data persists in Unity Catalog under `ops_catalog.lakebase_ops`:
 - Focus on clear, well-commented, professional Python with full type hints
 - All SQL queries must use parameterized queries (no SQL injection)
 - OAuth token refresh must be handled transparently
-- Scale-to-zero must be handled gracefully (no job failures)
+- Transient connection errors must be handled gracefully (no job failures)
 
 ---
 
@@ -363,7 +363,11 @@ All operational data persists in Unity Catalog under `ops_catalog.lakebase_ops`:
 | pg_locks | Lock information | Every 1 min |
 | pg_stat_database | Database-level stats (deadlocks, cache hits) | Every 5 min |
 | pg_statio_user_tables | I/O stats (heap_blks_hit, heap_blks_read) | Every 5 min |
-| pg_stat_bgwriter | Checkpoint statistics | Every 15 min |
+| pg_stat_bgwriter | Legacy checkpoint statistics (see pg_stat_checkpointer) | Every 15 min |
+| pg_stat_checkpointer | Checkpoint statistics (PG17, replaces bgwriter checkpoint cols) | Every 15 min |
+| pg_stat_io | I/O statistics by backend type (PG16+) | Every 5 min |
+| pg_stat_wal | WAL generation statistics (PG14+) | Every 5 min |
+| pg_stat_statements_info | pg_stat_statements deallocation/reset tracking (PG14+) | Every 5 min |
 | pg_index | Index metadata | Every 1 hour |
 
 ### Available Extensions
