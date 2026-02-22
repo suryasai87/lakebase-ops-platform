@@ -1,0 +1,55 @@
+name: Lakebase Branch Cleanup on PR Close
+
+on:
+  pull_request:
+    types: [closed]
+
+env:
+  LAKEBASE_PROJECT: ${{ vars.LAKEBASE_PROJECT }}
+
+jobs:
+  cleanup-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Databricks CLI
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+
+      - name: Delete Lakebase Branch
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          BRANCH_NAME="ci-pr-${{ github.event.pull_request.number }}"
+          echo "Deleting branch: $BRANCH_NAME"
+
+          databricks postgres delete-branch \
+            "projects/${LAKEBASE_PROJECT}/branches/${BRANCH_NAME}" \
+            || true  # Gracefully handle already-deleted branches
+
+          echo "Branch cleanup complete."
+
+  replay-migrations:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Databricks CLI
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+
+      - name: Replay Migrations on Staging
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          echo "Replaying migrations on staging branch..."
+          # flyway migrate -url=jdbc:postgresql://${STAGING_ENDPOINT}:5432/databricks_postgres
+
+      - name: Replay Migrations on Production
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          echo "Replaying migrations on production branch..."
+          # flyway migrate -url=jdbc:postgresql://${PROD_ENDPOINT}:5432/databricks_postgres

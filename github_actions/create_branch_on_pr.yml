@@ -1,0 +1,82 @@
+name: Lakebase Branch on PR Open
+
+on:
+  pull_request:
+    types: [opened, reopened]
+
+env:
+  LAKEBASE_PROJECT: ${{ vars.LAKEBASE_PROJECT }}
+
+jobs:
+  create-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Databricks CLI
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+
+      - name: Create Lakebase Branch
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          BRANCH_NAME="ci-pr-${{ github.event.pull_request.number }}"
+          echo "Creating branch: $BRANCH_NAME"
+
+          databricks postgres create-branch \
+            "projects/${LAKEBASE_PROJECT}" \
+            "$BRANCH_NAME" \
+            --json '{
+              "spec": {
+                "source_branch": "projects/'"${LAKEBASE_PROJECT}"'/branches/staging",
+                "ttl": "14400s"
+              }
+            }'
+
+      - name: Wait for Branch Active
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          BRANCH_NAME="ci-pr-${{ github.event.pull_request.number }}"
+          for i in $(seq 1 30); do
+            STATUS=$(databricks postgres get-branch \
+              "projects/${LAKEBASE_PROJECT}/branches/${BRANCH_NAME}" \
+              --output json | jq -r '.status.state')
+            echo "Attempt $i: Status=$STATUS"
+            if [ "$STATUS" = "ACTIVE" ]; then
+              echo "Branch is active!"
+              break
+            fi
+            sleep 10
+          done
+
+      - name: Apply Migrations
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          BRANCH_NAME="ci-pr-${{ github.event.pull_request.number }}"
+          echo "Applying migrations to branch: $BRANCH_NAME"
+          # Add your migration tool here (Flyway, Liquibase, etc.)
+          # flyway migrate -url=jdbc:postgresql://${BRANCH_ENDPOINT}:5432/databricks_postgres
+
+      - name: Run Integration Tests
+        run: |
+          echo "Running integration tests against ephemeral branch..."
+          # pytest tests/ --branch=ci-pr-${{ github.event.pull_request.number }}
+
+      - name: Post Schema Diff as PR Comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // In production: capture schema diff from Lakebase API and post as comment
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '## Lakebase Schema Diff\n\nBranch `ci-pr-${{ github.event.pull_request.number }}` created from staging.\n\n_Schema diff and test results will be posted here by the LakebaseOps platform._'
+            })
