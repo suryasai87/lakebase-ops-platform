@@ -48,3 +48,8 @@ ENV/
 *~
 .DS_Store
 Thumbs.db
+
+# Frontend build artifacts
+node_modules/
+tsconfig.tsbuildinfo
+app/static/
