@@ -232,6 +232,30 @@ lakebase-ops-platform/
 
 ---
 
+## Scheduled Jobs (Databricks Jobs)
+
+All 7 jobs replace pg_cron (unavailable in Lakebase) and can be triggered on-demand from the monitoring app's **Operations** page via the **"Sync Tables in Unity Catalog Schema Lakebase_Ops"** button.
+
+| Job | Job ID | Agent | Tool(s) | Schedule | Timeout |
+|-----|--------|-------|---------|----------|---------|
+| Metric Collector | `205010800477517` | Performance + Health | `persist_pg_stat_statements` + `monitor_system_health` | Every 5 min | 5 min |
+| Index Analyzer | `405039178411009` | Performance | `run_full_index_analysis` | Hourly | 10 min |
+| Vacuum Scheduler | `594266613956568` | Performance | `identify_tables_needing_vacuum` + `schedule_vacuum_analyze` | Daily 2 AM UTC | 60 min |
+| Sync Validator | `462158184008431` | Health | `run_full_sync_validation` | Every 15 min | 5 min |
+| Branch Manager | `676577590162017` | Provisioning | `enforce_ttl_policies` + `reset_branch_from_parent` | Every 6 hours | 10 min |
+| Cold Data Archiver | `120897564762964` | Health | `identify_cold_data` + `archive_cold_data_to_delta` | Weekly Sun 3 AM UTC | 120 min |
+| Cost Tracker | `1114339309161416` | Health | `track_cost_attribution` | Daily 6 AM UTC | 10 min |
+
+### Job API Endpoints (App Backend)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/jobs/list` | List all 7 jobs with current status |
+| `POST` | `/api/jobs/sync` | Trigger all 7 jobs simultaneously |
+| `GET` | `/api/jobs/sync/status?run_ids=...` | Poll run status (comma-separated run IDs) |
+
+---
+
 ## Key Design Decisions
 
 1. **Databricks Jobs replace pg_cron** — All scheduling via native workspace integration
