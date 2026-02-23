@@ -42,7 +42,7 @@ app.add_middleware(
 
 # Register API routers
 try:
-    from .routers import health, agents, metrics, performance, indexes, operations, lakebase
+    from .routers import health, agents, metrics, performance, indexes, operations, lakebase, jobs
 
     app.include_router(health.router)
     app.include_router(agents.router)
@@ -51,6 +51,7 @@ try:
     app.include_router(indexes.router)
     app.include_router(operations.router)
     app.include_router(lakebase.router)
+    app.include_router(jobs.router)
     logger.info("All routers registered successfully")
 except Exception as e:
     logger.error(f"Failed to import/register routers: {e}", exc_info=True)
