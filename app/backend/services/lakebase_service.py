@@ -12,14 +12,16 @@ ENDPOINT_HOST = os.getenv(
     "ep-hidden-haze-d2v9brhq.database.us-east-1.cloud.databricks.com",
 )
 
-_credential_cache = {"token": None, "timestamp": 0.0}
+_credential_cache: dict = {"token": None, "user": None, "timestamp": 0.0}
 
 
-def _get_db_credential() -> str:
-    """Generate OAuth DB credential via Databricks SDK (cached 50min)."""
+def _get_db_credential() -> tuple:
+    """Get Lakebase credential (password, user). Tries multiple methods."""
     now = time.time()
     if _credential_cache["token"] and (now - _credential_cache["timestamp"]) < 3000:
-        return _credential_cache["token"]
+        return _credential_cache["token"], _credential_cache["user"]
+
+    # Method 1: generate-db-credential API (works for provisioned Lakebase)
     try:
         from databricks.sdk import WorkspaceClient
         client = WorkspaceClient()
@@ -29,13 +31,38 @@ def _get_db_credential() -> str:
             body={"project_id": PROJECT_ID},
         )
         token = resp.get("credential", {}).get("password", "")
+        user = resp.get("credential", {}).get("username", "databricks")
         if token:
-            _credential_cache["token"] = token
-            _credential_cache["timestamp"] = now
-            return token
+            logger.info("Credential obtained via generate-db-credential API")
+            _credential_cache.update({"token": token, "user": user, "timestamp": now})
+            return token, user
     except Exception as e:
-        logger.error(f"Credential generation failed: {e}")
-    return _credential_cache.get("token", "")
+        logger.warning(f"generate-db-credential API failed: {e}")
+
+    # Method 2: Use SP's own OAuth token (works for autoscaling Lakebase)
+    try:
+        from databricks.sdk import WorkspaceClient
+        client = WorkspaceClient()
+        token = client.config.token
+        if token:
+            # For autoscaling, user is the SP identity
+            sp_id = os.getenv("DATABRICKS_CLIENT_ID", "")
+            user = sp_id if sp_id else "databricks"
+            logger.info(f"Using SP OAuth token for Lakebase auth (user={user})")
+            _credential_cache.update({"token": token, "user": user, "timestamp": now})
+            return token, user
+    except Exception as e:
+        logger.warning(f"SP OAuth token extraction failed: {e}")
+
+    # Method 3: Environment variable fallback
+    token = os.getenv("LAKEBASE_OAUTH_TOKEN", "")
+    user = os.getenv("LAKEBASE_DB_USER", "databricks")
+    if token:
+        logger.info("Using LAKEBASE_OAUTH_TOKEN env var")
+        _credential_cache.update({"token": token, "user": user, "timestamp": now})
+        return token, user
+
+    return "", "databricks"
 
 
 def get_realtime_stats() -> dict:
@@ -43,15 +70,18 @@ def get_realtime_stats() -> dict:
     stats: dict = {"timestamp": time.time()}
     try:
         import psycopg
-        token = _get_db_credential()
+
+        token, user = _get_db_credential()
         if not token:
             return {"error": "No Lakebase credential available"}
+
+        logger.info(f"Connecting to Lakebase: host={ENDPOINT_HOST}, user={user}")
 
         with psycopg.connect(
             host=ENDPOINT_HOST,
             port=5432,
             dbname="databricks_postgres",
-            user="databricks",
+            user=user,
             password=token,
             sslmode="require",
             options="-c statement_timeout=30000",
@@ -81,11 +111,15 @@ def get_realtime_stats() -> dict:
                 }
 
                 # pg_stat_wal
-                cur.execute("SELECT wal_bytes, wal_buffers_full FROM pg_stat_wal")
-                wal = cur.fetchone()
-                if wal:
-                    stats["wal_bytes"] = wal[0]
-                    stats["wal_buffers_full"] = wal[1]
+                try:
+                    cur.execute("SELECT wal_bytes, wal_buffers_full FROM pg_stat_wal")
+                    wal = cur.fetchone()
+                    if wal:
+                        stats["wal_bytes"] = wal[0]
+                        stats["wal_buffers_full"] = wal[1]
+                except Exception:
+                    stats["wal_bytes"] = 0
+                    stats["wal_buffers_full"] = 0
 
                 # Top dead tuple tables
                 cur.execute(
