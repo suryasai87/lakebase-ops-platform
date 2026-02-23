@@ -21,7 +21,15 @@ def _get_db_credential() -> tuple:
     if _credential_cache["token"] and (now - _credential_cache["timestamp"]) < 3000:
         return _credential_cache["token"], _credential_cache["user"]
 
-    # Method 1: generate-db-credential API (works for provisioned Lakebase)
+    # Method 1: Explicit env var override (highest priority when set in app.yaml)
+    token = os.getenv("LAKEBASE_OAUTH_TOKEN", "")
+    user = os.getenv("LAKEBASE_DB_USER", "databricks")
+    if token:
+        logger.info("Using LAKEBASE_OAUTH_TOKEN env var (explicit override)")
+        _credential_cache.update({"token": token, "user": user, "timestamp": now})
+        return token, user
+
+    # Method 2: generate-db-credential API (works for provisioned Lakebase)
     try:
         from databricks.sdk import WorkspaceClient
         client = WorkspaceClient()
@@ -39,28 +47,44 @@ def _get_db_credential() -> tuple:
     except Exception as e:
         logger.warning(f"generate-db-credential API failed: {e}")
 
-    # Method 2: Use SP's own OAuth token (works for autoscaling Lakebase)
+    # Method 3: Use SP's own OAuth token (works for autoscaling Lakebase)
     try:
         from databricks.sdk import WorkspaceClient
         client = WorkspaceClient()
-        token = client.config.token
+        token = None
+        try:
+            token = client.config.token
+        except Exception:
+            pass
+        if not token:
+            try:
+                headers = client.api_client.default_headers
+                auth = headers.get("Authorization", "")
+                if auth.startswith("Bearer "):
+                    token = auth[7:]
+            except Exception:
+                pass
+        if not token:
+            try:
+                resp = client.current_user.me()
+                token = getattr(client.config, '_token', None)
+                if not token and hasattr(client.config, '_header_factory'):
+                    hdr = client.config._header_factory()
+                    auth = hdr.get("Authorization", "")
+                    if auth.startswith("Bearer "):
+                        token = auth[7:]
+            except Exception:
+                pass
         if token:
-            # For autoscaling, user is the SP identity
             sp_id = os.getenv("DATABRICKS_CLIENT_ID", "")
             user = sp_id if sp_id else "databricks"
-            logger.info(f"Using SP OAuth token for Lakebase auth (user={user})")
+            logger.info(f"Using SP OAuth token for Lakebase auth (user={user}, token_len={len(token)})")
             _credential_cache.update({"token": token, "user": user, "timestamp": now})
             return token, user
+        else:
+            logger.warning("SP OAuth token: all extraction methods returned empty")
     except Exception as e:
         logger.warning(f"SP OAuth token extraction failed: {e}")
-
-    # Method 3: Environment variable fallback
-    token = os.getenv("LAKEBASE_OAUTH_TOKEN", "")
-    user = os.getenv("LAKEBASE_DB_USER", "databricks")
-    if token:
-        logger.info("Using LAKEBASE_OAUTH_TOKEN env var")
-        _credential_cache.update({"token": token, "user": user, "timestamp": now})
-        return token, user
 
     return "", "databricks"
 
