@@ -1,0 +1,19 @@
+command:
+  - "uvicorn"
+  - "backend.main:app"
+  - "--host"
+  - "0.0.0.0"
+  - "--port"
+  - "8080"
+
+env:
+  - name: OPS_CATALOG
+    value: "hls_amer_catalog"
+  - name: OPS_SCHEMA
+    value: "lakebase_ops"
+  - name: SQL_WAREHOUSE_ID
+    value: "8e4258d7fe74671b"
+  - name: LAKEBASE_PROJECT_ID
+    value: "83eb266d-27f8-4467-a7df-2b048eff09d7"
+  - name: LAKEBASE_ENDPOINT_HOST
+    value: "ep-hidden-haze-d2v9brhq.database.us-east-1.cloud.databricks.com"

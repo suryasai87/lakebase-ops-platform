@@ -1,0 +1,83 @@
+"""Agent Service: Static metadata for the 3 LakebaseOps agents."""
+
+AGENTS = [
+    {
+        "name": "ProvisioningAgent",
+        "description": "Day 0/Day 1: Database setup, branching, schema migrations, CI/CD, governance",
+        "tool_count": 17,
+        "icon": "build",
+        "color": "#1976d2",
+        "tools": [
+            {"name": "provision_lakebase_project", "module": "project", "schedule": None, "risk": "low"},
+            {"name": "create_ops_catalog", "module": "project", "schedule": None, "risk": "low"},
+            {"name": "create_branch", "module": "branching", "schedule": None, "risk": "low"},
+            {"name": "protect_branch", "module": "branching", "schedule": None, "risk": "low"},
+            {"name": "enforce_ttl_policies", "module": "branching", "schedule": "every 6h", "risk": "medium"},
+            {"name": "monitor_branch_count", "module": "branching", "schedule": "every 6h", "risk": "low"},
+            {"name": "reset_branch_from_parent", "module": "branching", "schedule": "daily 2AM", "risk": "medium"},
+            {"name": "create_branch_on_pr", "module": "branching", "schedule": None, "risk": "low"},
+            {"name": "delete_branch_on_pr_close", "module": "branching", "schedule": None, "risk": "medium"},
+            {"name": "apply_schema_migration", "module": "migration", "schedule": None, "risk": "medium"},
+            {"name": "capture_schema_diff", "module": "migration", "schedule": None, "risk": "low"},
+            {"name": "test_migration_on_branch", "module": "migration", "schedule": None, "risk": "low"},
+            {"name": "setup_cicd_pipeline", "module": "cicd", "schedule": None, "risk": "low"},
+            {"name": "configure_rls", "module": "governance", "schedule": None, "risk": "medium"},
+            {"name": "setup_unity_catalog_integration", "module": "governance", "schedule": None, "risk": "low"},
+            {"name": "setup_ai_agent_branching", "module": "governance", "schedule": None, "risk": "low"},
+            {"name": "provision_with_governance", "module": "governance", "schedule": None, "risk": "medium"},
+        ],
+    },
+    {
+        "name": "PerformanceAgent",
+        "description": "Day 1+: Query analysis, indexing, vacuum scheduling, capacity planning",
+        "tool_count": 14,
+        "icon": "speed",
+        "color": "#f57c00",
+        "tools": [
+            {"name": "persist_pg_stat_statements", "module": "metrics", "schedule": "every 5min", "risk": "low"},
+            {"name": "collect_pg_stat_statements_info", "module": "metrics", "schedule": "every 5min", "risk": "low"},
+            {"name": "detect_unused_indexes", "module": "indexes", "schedule": "hourly", "risk": "low"},
+            {"name": "detect_bloated_indexes", "module": "indexes", "schedule": "hourly", "risk": "low"},
+            {"name": "detect_missing_indexes", "module": "indexes", "schedule": "hourly", "risk": "low"},
+            {"name": "detect_duplicate_indexes", "module": "indexes", "schedule": "hourly", "risk": "low"},
+            {"name": "detect_missing_fk_indexes", "module": "indexes", "schedule": "hourly", "risk": "low"},
+            {"name": "run_full_index_analysis", "module": "indexes", "schedule": "hourly", "risk": "low"},
+            {"name": "identify_tables_needing_vacuum", "module": "maintenance", "schedule": "daily", "risk": "low"},
+            {"name": "schedule_vacuum_analyze", "module": "maintenance", "schedule": "daily 2AM", "risk": "medium"},
+            {"name": "schedule_vacuum_full", "module": "maintenance", "schedule": None, "risk": "high"},
+            {"name": "check_txid_wraparound_risk", "module": "maintenance", "schedule": "daily", "risk": "low"},
+            {"name": "tune_autovacuum_parameters", "module": "maintenance", "schedule": None, "risk": "medium"},
+            {"name": "analyze_slow_queries_with_ai", "module": "optimization", "schedule": None, "risk": "low"},
+        ],
+    },
+    {
+        "name": "HealthAgent",
+        "description": "Day 2: Continuous monitoring, sync validation, archival, self-healing",
+        "tool_count": 16,
+        "icon": "health_and_safety",
+        "color": "#388e3c",
+        "tools": [
+            {"name": "monitor_system_health", "module": "monitoring", "schedule": "every 5min", "risk": "low"},
+            {"name": "evaluate_alert_thresholds", "module": "monitoring", "schedule": "every 5min", "risk": "low"},
+            {"name": "execute_low_risk_sop", "module": "monitoring", "schedule": None, "risk": "low"},
+            {"name": "validate_sync_completeness", "module": "sync", "schedule": "every 15min", "risk": "low"},
+            {"name": "validate_sync_integrity", "module": "sync", "schedule": "every 15min", "risk": "low"},
+            {"name": "run_full_sync_validation", "module": "sync", "schedule": "every 15min", "risk": "low"},
+            {"name": "identify_cold_data", "module": "archival", "schedule": "weekly", "risk": "low"},
+            {"name": "archive_cold_data_to_delta", "module": "archival", "schedule": "weekly", "risk": "medium"},
+            {"name": "create_unified_access_view", "module": "archival", "schedule": None, "risk": "low"},
+            {"name": "monitor_connections", "module": "connections", "schedule": "every 5min", "risk": "low"},
+            {"name": "terminate_idle_connections", "module": "connections", "schedule": None, "risk": "medium"},
+            {"name": "track_cost_attribution", "module": "operations", "schedule": "daily 6AM", "risk": "low"},
+            {"name": "recommend_scale_to_zero_timeout", "module": "operations", "schedule": "weekly", "risk": "low"},
+            {"name": "diagnose_root_cause", "module": "operations", "schedule": None, "risk": "low"},
+            {"name": "self_heal", "module": "operations", "schedule": None, "risk": "medium"},
+            {"name": "natural_language_dba", "module": "operations", "schedule": None, "risk": "low"},
+        ],
+    },
+]
+
+
+def get_agents_summary() -> list[dict]:
+    """Return agent metadata for the API."""
+    return AGENTS
