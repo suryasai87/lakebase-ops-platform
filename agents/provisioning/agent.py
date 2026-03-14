@@ -26,16 +26,17 @@ from .branching import BranchingMixin
 from .migration import MigrationMixin
 from .cicd import CICDMixin
 from .governance import GovernanceMixin
+from .assessment import AssessmentMixin
 
 logger = logging.getLogger("lakebase_ops.provisioning")
 
 
-class ProvisioningAgent(ProjectMixin, BranchingMixin, MigrationMixin, CICDMixin, GovernanceMixin, BaseAgent):
+class ProvisioningAgent(ProjectMixin, BranchingMixin, MigrationMixin, CICDMixin, GovernanceMixin, AssessmentMixin, BaseAgent):
     """
     Provisioning & DevOps Agent — manages Day 0/Day 1 operations.
 
     Implements all 59 setup tasks from the Enterprise Design Guide
-    plus PRD FR-06 and FR-08.
+    plus PRD FR-06, FR-08, and Migration Assessment.
     """
 
     def __init__(self, lakebase_client, delta_writer, alert_manager):
@@ -100,6 +101,16 @@ class ProvisioningAgent(ProjectMixin, BranchingMixin, MigrationMixin, CICDMixin,
         # Full Provisioning Workflow
         self.register_tool("provision_with_governance", self.provision_with_governance,
                            "Full project setup with all governance and integrations")
+
+        # Migration Assessment
+        self.register_tool("connect_and_discover", self.connect_and_discover,
+                           "Connect read-only to source Postgres and discover schema/extensions/functions")
+        self.register_tool("profile_workload", self.profile_workload,
+                           "Profile workload patterns from pg_stat_statements and pg_stat_activity")
+        self.register_tool("assess_readiness", self.assess_readiness,
+                           "Compute Lakebase readiness score with blocker detection")
+        self.register_tool("generate_migration_blueprint", self.generate_migration_blueprint,
+                           "Generate 4-phase migration plan with commands and timeline")
 
     # -----------------------------------------------------------------------
     # Automation Cycle

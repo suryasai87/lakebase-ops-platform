@@ -164,6 +164,20 @@ class IndexRecommendation:
     requires_approval: bool = True
 
 
+# Migration Assessment defaults
+LAKEBASE_CONSTRAINTS = {
+    "max_storage_autoscaling_gb": 8 * 1024,
+    "max_storage_provisioned_gb": 2 * 1024,
+    "max_connections": 4000,
+    "max_qps": 100_000,
+    "max_sustained_tps": 5000,
+    "max_cu_autoscaling": 32,
+    "max_cu_provisioned": 112,
+    "max_branches": 500,
+    "max_root_branches": 3,
+    "pg_versions": ["16", "17"],
+}
+
 # Workspace defaults
 WORKSPACE_HOST = "fe-vm-hls-amer.cloud.databricks.com"
 DEFAULT_CATALOG = "hls_amer_catalog"
@@ -180,6 +194,7 @@ DELTA_TABLES = {
     "sync_validation": f"{OPS_CATALOG}.{OPS_SCHEMA}.sync_validation_history",
     "branch_lifecycle": f"{OPS_CATALOG}.{OPS_SCHEMA}.branch_lifecycle",
     "data_archival": f"{OPS_CATALOG}.{OPS_SCHEMA}.data_archival_history",
+    "migration_assessments": f"{OPS_CATALOG}.{OPS_SCHEMA}.migration_assessments",
 }
 
 # Job schedules
