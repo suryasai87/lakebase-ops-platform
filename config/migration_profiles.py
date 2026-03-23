@@ -19,6 +19,8 @@ class SourceEngine(Enum):
     CLOUD_SQL_POSTGRESQL = "cloud-sql-postgresql"
     AZURE_POSTGRESQL = "azure-postgresql"
     SELF_MANAGED_POSTGRESQL = "self-managed-postgresql"
+    ALLOYDB_POSTGRESQL = "alloydb-postgresql"
+    SUPABASE_POSTGRESQL = "supabase-postgresql"
     AURORA_MYSQL = "aurora-mysql"
 
 

@@ -12,10 +12,10 @@ STATIC = ROOT / "static"
 
 def main():
     print("=== Installing frontend dependencies ===")
-    subprocess.run(["npm", "install"], cwd=FRONTEND, check=True)
+    subprocess.run(["bun", "install"], cwd=FRONTEND, check=True)
 
     print("=== Building frontend ===")
-    subprocess.run(["npm", "run", "build"], cwd=FRONTEND, check=True)
+    subprocess.run(["bun", "run", "build"], cwd=FRONTEND, check=True)
 
     print("=== Copying dist -> static ===")
     if STATIC.exists():

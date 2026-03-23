@@ -8,13 +8,34 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Tooltip,
 } from "@mui/material";
+
+const MAX_CELL_CHARS = 120;
+
+interface Column {
+  key: string;
+  label: string;
+  format?: (value: any) => string;
+}
 
 interface DataTableProps {
   title: string;
-  columns: { key: string; label: string }[];
+  columns: Column[];
   rows: Record<string, any>[];
   maxHeight?: number;
+}
+
+function formatCell(value: any, col: Column): string {
+  if (value == null) return "—";
+  if (col.format) return col.format(value);
+  return String(value);
+}
+
+function rowKey(row: Record<string, any>, index: number, columns: Column[]): string | number {
+  if (row.id != null) return row.id;
+  if (columns.length > 0 && row[columns[0].key] != null) return `${row[columns[0].key]}-${index}`;
+  return index;
 }
 
 export default function DataTable({
@@ -52,12 +73,24 @@ export default function DataTable({
                 </TableRow>
               ) : (
                 rows.map((row, i) => (
-                  <TableRow key={i} hover>
-                    {columns.map((c) => (
-                      <TableCell key={c.key} sx={{ borderBottom: "1px solid #21262D" }}>
-                        {row[c.key] ?? "—"}
-                      </TableCell>
-                    ))}
+                  <TableRow key={rowKey(row, i, columns)} hover>
+                    {columns.map((c) => {
+                      const text = formatCell(row[c.key], c);
+                      const truncated = text.length > MAX_CELL_CHARS;
+                      return (
+                        <TableCell key={c.key} sx={{ borderBottom: "1px solid #21262D", maxWidth: 300 }}>
+                          {truncated ? (
+                            <Tooltip title={text} arrow placement="top-start">
+                              <span style={{ cursor: "help" }}>
+                                {text.slice(0, MAX_CELL_CHARS)}...
+                              </span>
+                            </Tooltip>
+                          ) : (
+                            text
+                          )}
+                        </TableCell>
+                      );
+                    })}
                   </TableRow>
                 ))
               )}

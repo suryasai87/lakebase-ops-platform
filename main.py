@@ -56,8 +56,9 @@ async def run_full_platform_simulation():
     # -----------------------------------------------------------------------
     logger.info("Initializing shared infrastructure...")
 
+    from config.settings import WORKSPACE_HOST
     lakebase_client = LakebaseClient(
-        workspace_host="fe-vm-hls-amer.cloud.databricks.com",
+        workspace_host=WORKSPACE_HOST or "localhost",
         mock_mode=True,
     )
     delta_writer = DeltaWriter(mock_mode=True)
@@ -71,7 +72,7 @@ async def run_full_platform_simulation():
     # Initialize the AgentFramework
     # -----------------------------------------------------------------------
     framework = AgentFramework(
-        workspace_host="fe-vm-hls-amer.cloud.databricks.com",
+        workspace_host=WORKSPACE_HOST or "localhost",
         mock_mode=True,
     )
 

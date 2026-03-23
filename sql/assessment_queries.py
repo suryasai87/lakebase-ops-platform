@@ -233,3 +233,49 @@ WORKLOAD_INDEX_USAGE = """
 WORKLOAD_DATABASE_SIZE = """
     SELECT pg_database_size(current_database()) AS db_size_bytes
 """
+
+# =============================================================================
+# Profiling Queries — used by _live_workload in AssessmentMixin
+# =============================================================================
+
+PROFILE_WORKLOAD = """
+    SELECT count(DISTINCT queryid) AS total_queries,
+           sum(calls) AS total_calls,
+           round(sum(CASE WHEN query ~* '^(SELECT|WITH)' THEN calls ELSE 0 END)::numeric
+                 / NULLIF(sum(calls), 0) * 100, 1) AS reads_pct,
+           round(sum(CASE WHEN query ~* '^(INSERT|UPDATE|DELETE)' THEN calls ELSE 0 END)::numeric
+                 / NULLIF(sum(calls), 0) * 100, 1) AS writes_pct,
+           round(sum(calls)::numeric
+                 / NULLIF(EXTRACT(epoch FROM now() - pg_postmaster_start_time()), 0), 1) AS avg_qps,
+           max(calls) AS peak_qps,
+           round(sum(CASE WHEN query ~* '^(INSERT|UPDATE|DELETE)' THEN calls ELSE 0 END)::numeric
+                 / NULLIF(EXTRACT(epoch FROM now() - pg_postmaster_start_time()), 0), 1) AS avg_tps,
+           percentile_cont(0.99) WITHIN GROUP (ORDER BY mean_exec_time) AS p99_latency_ms
+    FROM pg_stat_statements
+    WHERE queryid IS NOT NULL
+"""
+
+PROFILE_TOP_QUERIES = """
+    SELECT query, calls, round(mean_exec_time::numeric, 2) AS mean_ms
+    FROM pg_stat_statements
+    WHERE queryid IS NOT NULL
+    ORDER BY total_exec_time DESC
+    LIMIT 10
+"""
+
+PROFILE_HOT_TABLES = """
+    SELECT relname
+    FROM pg_stat_user_tables
+    ORDER BY (n_tup_ins + n_tup_upd + n_tup_del) DESC
+    LIMIT 10
+"""
+
+PROFILE_CONNECTIONS = """
+    SELECT count(*) AS current_connections,
+           count(*) AS peak_connections
+    FROM pg_stat_activity
+    WHERE backend_type = 'client backend'
+"""
+
+# Aliases for backward compatibility
+DISCOVER_MATVIEWS = DISCOVER_MATERIALIZED_VIEWS

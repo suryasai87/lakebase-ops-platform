@@ -202,7 +202,7 @@ def phase_infrastructure(token: str, report: TestReport) -> bool:
     print("  PHASE 1: INFRASTRUCTURE SETUP")
     print("=" * 70)
 
-    # 1a. Create catalog (use hls_amer_catalog if ops_catalog fails due to storage)
+    # 1a. Create catalog (falls back to DEFAULT_CATALOG if ops_catalog fails)
     t0 = time.time()
     try:
         result = sql_execute(f"CREATE CATALOG IF NOT EXISTS {OPS_CATALOG}", token)
@@ -212,11 +212,10 @@ def phase_infrastructure(token: str, report: TestReport) -> bool:
             report.add("Infrastructure", "Create ops_catalog", "PASS",
                         duration=time.time() - t0)
         elif "storage" in error_msg.lower() or "INVALID_STATE" in error_msg:
-            # Fallback: use hls_amer_catalog as the ops catalog
-            logger.warning("Cannot create ops_catalog (storage root issue), using hls_amer_catalog")
-            OPS_CATALOG = "hls_amer_catalog"
+            logger.warning("Cannot create ops_catalog (storage root issue), using DEFAULT_CATALOG env var")
+            OPS_CATALOG = os.getenv("DEFAULT_CATALOG", "ops_catalog")
             report.add("Infrastructure", "Create ops_catalog", "WARN",
-                        message="Using hls_amer_catalog as fallback",
+                        message=f"Using {OPS_CATALOG} as fallback",
                         duration=time.time() - t0)
         else:
             report.add("Infrastructure", "Create ops_catalog", "FAIL",
@@ -1641,16 +1640,15 @@ async def main():
         print("  Ensure 'databricks auth token --profile DEFAULT' works.")
         sys.exit(1)
 
-    # Auto-detect working catalog: ops_catalog may not exist, fall back to hls_amer_catalog
     global OPS_CATALOG
     try:
         test_result = sql_execute(f"SELECT 1 FROM {OPS_CATALOG}.{OPS_SCHEMA}.lakebase_metrics LIMIT 1", token)
         state = test_result.get("status", {}).get("state", "")
         if state != "SUCCEEDED":
-            OPS_CATALOG = "hls_amer_catalog"
+            OPS_CATALOG = os.getenv("DEFAULT_CATALOG", "ops_catalog")
             logger.info(f"Using fallback catalog: {OPS_CATALOG}")
     except Exception:
-        OPS_CATALOG = "hls_amer_catalog"
+        OPS_CATALOG = os.getenv("DEFAULT_CATALOG", "ops_catalog")
         logger.info(f"Using fallback catalog: {OPS_CATALOG}")
 
     run_all = args.phase == "all"

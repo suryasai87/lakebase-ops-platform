@@ -55,9 +55,27 @@ class DeltaWriter:
                 self.sql_api_mode = True
 
     def _get_token(self) -> str:
-        """Get Databricks token via CLI (cached for 50 min)."""
+        """Get Databricks token via SDK (preferred) or CLI fallback. Cached for 50 min."""
         if self._db_token and (time.time() - self._token_time) < 3000:
             return self._db_token
+
+        # Method 1: Databricks SDK (works in Apps and notebooks)
+        try:
+            from databricks.sdk import WorkspaceClient
+            client = WorkspaceClient()
+            token = getattr(client.config, "token", None)
+            if not token:
+                auth_header = client.api_client.default_headers.get("Authorization", "")
+                if auth_header.startswith("Bearer "):
+                    token = auth_header[7:]
+            if token:
+                self._db_token = token
+                self._token_time = time.time()
+                return self._db_token
+        except Exception as e:
+            logger.debug(f"SDK token extraction failed, trying CLI: {e}")
+
+        # Method 2: CLI fallback (local development)
         try:
             result = subprocess.run(
                 ["databricks", "auth", "token", "--profile", "DEFAULT",

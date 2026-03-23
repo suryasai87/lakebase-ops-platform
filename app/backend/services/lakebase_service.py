@@ -6,11 +6,9 @@ import logging
 
 logger = logging.getLogger("lakebase_ops_app.lakebase")
 
-PROJECT_ID = os.getenv("LAKEBASE_PROJECT_ID", "83eb266d-27f8-4467-a7df-2b048eff09d7")
-ENDPOINT_HOST = os.getenv(
-    "LAKEBASE_ENDPOINT_HOST",
-    "ep-hidden-haze-d2v9brhq.database.us-east-1.cloud.databricks.com",
-)
+PROJECT_ID = os.getenv("LAKEBASE_PROJECT_ID", "")
+ENDPOINT_HOST = os.getenv("LAKEBASE_ENDPOINT_HOST", "")
+LAKEBASE_ENDPOINT_NAME = os.getenv("LAKEBASE_ENDPOINT_NAME", "")
 
 _credential_cache: dict = {"token": None, "user": None, "timestamp": 0.0}
 
@@ -29,25 +27,46 @@ def _get_db_credential() -> tuple:
         _credential_cache.update({"token": token, "user": user, "timestamp": now})
         return token, user
 
-    # Method 2: generate-db-credential API (works for provisioned Lakebase)
-    try:
-        from databricks.sdk import WorkspaceClient
-        client = WorkspaceClient()
-        resp = client.api_client.do(
-            "POST",
-            "/api/2.0/lakebase/credentials/generate-db-credential",
-            body={"project_id": PROJECT_ID},
-        )
-        token = resp.get("credential", {}).get("password", "")
-        user = resp.get("credential", {}).get("username", "databricks")
-        if token:
-            logger.info("Credential obtained via generate-db-credential API")
-            _credential_cache.update({"token": token, "user": user, "timestamp": now})
-            return token, user
-    except Exception as e:
-        logger.warning(f"generate-db-credential API failed: {e}")
+    # Method 2: Autoscaling Lakebase credential API (/api/2.0/postgres/credentials)
+    if LAKEBASE_ENDPOINT_NAME:
+        try:
+            from databricks.sdk import WorkspaceClient
+            client = WorkspaceClient()
+            resp = client.api_client.do(
+                "POST",
+                "/api/2.0/postgres/credentials",
+                body={"endpoint": LAKEBASE_ENDPOINT_NAME},
+            )
+            token = resp.get("token", "")
+            if token:
+                me = client.current_user.me()
+                user = me.user_name if me and me.user_name else "databricks"
+                logger.info("Credential obtained via Autoscaling postgres/credentials API")
+                _credential_cache.update({"token": token, "user": user, "timestamp": now})
+                return token, user
+        except Exception as e:
+            logger.warning(f"Autoscaling credentials API failed: {e}")
 
-    # Method 3: Use SP's own OAuth token (works for autoscaling Lakebase)
+    # Method 3: Provisioned Lakebase credential API (legacy)
+    if PROJECT_ID:
+        try:
+            from databricks.sdk import WorkspaceClient
+            client = WorkspaceClient()
+            resp = client.api_client.do(
+                "POST",
+                "/api/2.0/lakebase/credentials/generate-db-credential",
+                body={"project_id": PROJECT_ID},
+            )
+            token = resp.get("credential", {}).get("password", "")
+            user = resp.get("credential", {}).get("username", "databricks")
+            if token:
+                logger.info("Credential obtained via Provisioned generate-db-credential API")
+                _credential_cache.update({"token": token, "user": user, "timestamp": now})
+                return token, user
+        except Exception as e:
+            logger.warning(f"Provisioned credentials API failed: {e}")
+
+    # Method 4: Extract SP's own OAuth token from SDK headers
     try:
         from databricks.sdk import WorkspaceClient
         client = WorkspaceClient()
@@ -64,21 +83,10 @@ def _get_db_credential() -> tuple:
                     token = auth[7:]
             except Exception:
                 pass
-        if not token:
-            try:
-                resp = client.current_user.me()
-                token = getattr(client.config, '_token', None)
-                if not token and hasattr(client.config, '_header_factory'):
-                    hdr = client.config._header_factory()
-                    auth = hdr.get("Authorization", "")
-                    if auth.startswith("Bearer "):
-                        token = auth[7:]
-            except Exception:
-                pass
         if token:
             sp_id = os.getenv("DATABRICKS_CLIENT_ID", "")
             user = sp_id if sp_id else "databricks"
-            logger.info(f"Using SP OAuth token for Lakebase auth (user={user}, token_len={len(token)})")
+            logger.info(f"Using SP OAuth token for Lakebase auth (user={user})")
             _credential_cache.update({"token": token, "user": user, "timestamp": now})
             return token, user
         else:

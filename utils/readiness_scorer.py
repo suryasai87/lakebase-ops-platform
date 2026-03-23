@@ -49,22 +49,39 @@ LAKEBASE_SUPPORTED_EXTENSIONS = {
 }
 
 EXTENSION_WORKAROUNDS = {
+    # AWS-specific
+    "aws_s3": "Use Databricks SDK or Unity Catalog for S3 access",
+    "aws_lambda": "Use Databricks serverless compute or external API calls",
+    # GCP-specific
+    "google_ml_integration": "Not available; use Databricks Foundation Model API for ML inference",
+    "pg_squeeze": "Use VACUUM FULL + REINDEX CONCURRENTLY (requires brief lock)",
+    # Azure-specific
+    "azure_storage": "Replace with Databricks SDK or Unity Catalog for Azure Blob access",
+    "azure_ai": "Replace with Databricks Foundation Model API for AI services",
+    "age": "Not supported; use GraphFrames or Delta Lake for graph workloads",
+    # Scheduling / maintenance
     "pg_cron": "Replace with Databricks Jobs for scheduled tasks",
     "pg_partman": "Manage partitions manually or via Databricks Jobs notebooks",
     "pg_repack": "Use VACUUM FULL + REINDEX CONCURRENTLY (requires brief lock)",
+    # Replication / CDC
     "pglogical": "No logical replication in Lakebase; use Lakeflow Connect or application-level sync",
-    "pgaudit": "Use PostgreSQL system views (pg_stat_activity, pg_stat_statements) or Databricks audit logs",
-    "aws_s3": "Use Databricks SDK or Unity Catalog for S3 access",
-    "aws_lambda": "Use Databricks serverless compute or external API calls",
-    "pg_tle": "Custom Trusted Language Extensions must be evaluated individually",
     "wal2json": "No WAL-based CDC; use Lakeflow Connect for change capture",
     "decoderbufs": "No WAL-based CDC; use Lakeflow Connect",
+    # Auditing / monitoring
+    "pgaudit": "Use PostgreSQL system views (pg_stat_activity, pg_stat_statements) or Databricks audit logs",
     "pg_stat_kcache": "Not available; use pg_stat_statements for query-level metrics",
     "pg_wait_sampling": "Not available; use pg_stat_activity wait events",
     "pg_qualstats": "Not available; use EXPLAIN ANALYZE for query plan analysis",
+    # Distributed / scale-out
     "citus": "No distributed/sharded tables in Lakebase",
     "timescaledb": "Not available; use standard partitioning or Delta Lake for time-series",
+    # Connection pooling
     "pgbouncer": "No built-in connection pooling; use application-side pooling",
+    # Trusted Language Extensions
+    "pg_tle": "Custom Trusted Language Extensions must be evaluated individually",
+    # Supabase-specific
+    "pgjwt": "Implement JWT validation in application layer or use Databricks OAuth",
+    "supautils": "Supabase utility functions not available; replicate needed logic in application code",
 }
 
 
@@ -412,15 +429,42 @@ def _score_operational(db: DatabaseProfile, workload: WorkloadProfile | None) ->
     warnings = []
     score = 100
 
-    pg_cron_used = any(e.name.lower() == "pg_cron" for e in db.extensions)
-    if pg_cron_used:
+    ext_names = {e.name.lower() for e in db.extensions}
+
+    if "pg_cron" in ext_names:
         warnings.append("pg_cron jobs must be migrated to Databricks Jobs")
         score -= 10
 
-    aws_extensions = [e.name.lower() for e in db.extensions if e.name.lower().startswith("aws_")]
+    aws_extensions = [n for n in ext_names if n.startswith("aws_")]
     if aws_extensions:
-        warnings.append(f"AWS-specific extensions ({', '.join(aws_extensions)}) need replacement")
+        warnings.append(f"AWS-specific extensions ({', '.join(sorted(aws_extensions))}) need replacement")
         score -= 5 * len(aws_extensions)
+
+    gcp_extensions = [n for n in ext_names if n.startswith("google_")]
+    if gcp_extensions:
+        warnings.append(f"GCP-specific extensions ({', '.join(sorted(gcp_extensions))}) need replacement with Databricks equivalents")
+        score -= 5 * len(gcp_extensions)
+
+    azure_extensions = [n for n in ext_names if n.startswith("azure_")]
+    if azure_extensions:
+        warnings.append(f"Azure-specific extensions ({', '.join(sorted(azure_extensions))}) need replacement with Databricks equivalents")
+        score -= 5 * len(azure_extensions)
+
+    if "age" in ext_names:
+        warnings.append("Apache AGE graph extension not supported - evaluate GraphFrames or Delta Lake for graph workloads")
+        score -= 5
+
+    if "timescaledb" in ext_names:
+        warnings.append("TimescaleDB hypertables must be converted to standard partitioned tables or Delta Lake time-series")
+        score -= 10
+
+    if "citus" in ext_names:
+        warnings.append("Citus distributed tables must be consolidated - Lakebase does not support sharding")
+        score -= 10
+
+    if "pglogical" in ext_names:
+        warnings.append("pglogical replication must be replaced with Lakeflow Connect or application-level sync")
+        score -= 5
 
     if workload and workload.connection_count_avg > 500:
         warnings.append("High average connection count - consider connection pooling strategy")

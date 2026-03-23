@@ -15,6 +15,8 @@ import os
 import sys
 import time
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config.migration_profiles import (
@@ -60,6 +62,11 @@ class TestReport:
         print(f"  ASSESSMENT TESTS: {passed}/{total} passed, {failed} failed ({elapsed:.1f}s)")
         print(f"{'=' * 70}")
         return failed == 0
+
+
+@pytest.fixture
+def report():
+    return TestReport()
 
 
 # =============================================================================

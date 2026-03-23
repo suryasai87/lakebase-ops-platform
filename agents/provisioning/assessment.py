@@ -63,15 +63,34 @@ class AssessmentMixin:
         profile_id = str(uuid.uuid4())[:8]
 
         if mock:
-            db_profile = self._mock_discover(database or "app_production")
+            _mock_engines = {
+                "aurora-postgresql": self._mock_discover,
+                "rds-postgresql": self._mock_discover_rds,
+                "cloud-sql-postgresql": self._mock_discover_cloud_sql,
+                "azure-postgresql": self._mock_discover_azure,
+                "self-managed-postgresql": self._mock_discover_self_managed,
+                "alloydb-postgresql": self._mock_discover_alloydb,
+                "supabase-postgresql": self._mock_discover_supabase,
+            }
+            discover_fn = _mock_engines.get(source_engine, self._mock_discover)
+            db_profile = discover_fn(database or "app_production")
         else:
             db_profile = self._live_discover(endpoint, database, source_user, source_password)
 
         engine = SourceEngine(source_engine)
+        _mock_endpoints = {
+            "aurora-postgresql": "mock-aurora.cluster-xxx.us-east-1.rds.amazonaws.com",
+            "rds-postgresql": "mock-rds.xxx.us-east-1.rds.amazonaws.com",
+            "cloud-sql-postgresql": "mock-project:us-central1:mock-instance",
+            "azure-postgresql": "mock-server.postgres.database.azure.com",
+            "self-managed-postgresql": "pg-primary.internal.example.com",
+            "alloydb-postgresql": "10.0.0.5",
+            "supabase-postgresql": "db.abcdefghijkl.supabase.co",
+        }
         profile = MigrationProfile(
             profile_id=profile_id,
             source_engine=engine,
-            source_endpoint=endpoint or "mock-aurora.cluster-xxx.us-east-1.rds.amazonaws.com",
+            source_endpoint=endpoint or _mock_endpoints.get(source_engine, "mock-source.example.com"),
             source_version=db_profile.pg_version,
             source_region=region,
             databases=[db_profile],
@@ -228,6 +247,7 @@ class AssessmentMixin:
         if profile and profile.source_endpoint:
             src_ep = profile.source_endpoint
 
+        engine_str = profile.source_engine.value if profile else "aurora-postgresql"
         blueprint = _generate_blueprint(
             db_profile=db_profile,
             assessment=assessment,
@@ -235,6 +255,7 @@ class AssessmentMixin:
             source_endpoint=src_ep,
             lakebase_endpoint=lakebase_endpoint,
             database_name=db_profile.name,
+            source_engine=engine_str,
         )
 
         if profile:
@@ -355,24 +376,410 @@ class AssessmentMixin:
             connection_count_peak=350,
         )
 
+    def _mock_discover_rds(self, db_name: str) -> DatabaseProfile:
+        """Mock RDS PostgreSQL profile - smaller instance, pg_repack, no Aurora ML."""
+        extensions = [
+            ExtensionInfo("pg_stat_statements", "1.10", True),
+            ExtensionInfo("pgvector", "0.7.0", True),
+            ExtensionInfo("pg_trgm", "1.6", True),
+            ExtensionInfo("pgcrypto", "1.3", True),
+            ExtensionInfo("uuid-ossp", "1.1", True),
+            ExtensionInfo("pg_cron", "1.6", False, "Replace with Databricks Jobs"),
+            ExtensionInfo("aws_s3", "1.1", False, "Use Databricks SDK for S3 access"),
+            ExtensionInfo("pg_repack", "1.5.0", False, "Use VACUUM FULL + REINDEX CONCURRENTLY"),
+        ]
+        tables = [
+            TableProfile("public", "customers", 800_000, 400_000_000, 4, False, True, 12),
+            TableProfile("public", "transactions", 5_000_000, 2_800_000_000, 6, True, True, 18),
+            TableProfile("public", "accounts", 200_000, 100_000_000, 3, False, True, 10),
+            TableProfile("public", "audit_trail", 12_000_000, 6_000_000_000, 1, False, False, 8),
+            TableProfile("public", "config", 500, 50_000, 1, False, False, 6),
+        ]
+        functions = [
+            FunctionInfo("public", "update_timestamp", "plpgsql", True, 6),
+            FunctionInfo("public", "calculate_balance", "plpgsql", False, 30),
+        ]
+        triggers = [
+            TriggerInfo("public", "transactions", "trg_txn_timestamp", "INSERT OR UPDATE", "BEFORE", "update_timestamp"),
+        ]
+        total_size = sum(t.size_bytes for t in tables)
+        return DatabaseProfile(
+            name=db_name, size_bytes=total_size,
+            size_gb=round(total_size / (1024 ** 3), 2),
+            table_count=len(tables), schema_count=1, schemas=["public"],
+            tables=tables, extensions=extensions, functions=functions, triggers=triggers,
+            sequence_count=5, materialized_view_count=1, custom_type_count=1,
+            foreign_key_count=3, has_logical_replication=False, replication_slots=[],
+            pg_version="15.15",
+        )
+
+    def _mock_discover_cloud_sql(self, db_name: str) -> DatabaseProfile:
+        """Mock Cloud SQL PostgreSQL profile - GCP extensions, no AWS deps."""
+        extensions = [
+            ExtensionInfo("pg_stat_statements", "1.10", True),
+            ExtensionInfo("pgvector", "0.7.0", True),
+            ExtensionInfo("postgis", "3.4.0", True),
+            ExtensionInfo("pg_trgm", "1.6", True),
+            ExtensionInfo("pgcrypto", "1.3", True),
+            ExtensionInfo("uuid-ossp", "1.1", True),
+            ExtensionInfo("pg_cron", "1.6", False, "Replace with Databricks Jobs"),
+            ExtensionInfo("google_ml_integration", "1.0", False, "Use Databricks Foundation Model API"),
+            ExtensionInfo("pg_squeeze", "1.6", False, "Use VACUUM FULL + REINDEX CONCURRENTLY"),
+        ]
+        tables = [
+            TableProfile("public", "users", 3_000_000, 1_500_000_000, 5, False, True, 14),
+            TableProfile("public", "documents", 8_000_000, 4_500_000_000, 4, False, True, 20),
+            TableProfile("public", "doc_embeddings", 8_000_000, 12_000_000_000, 2, False, True, 4),
+            TableProfile("public", "search_log", 25_000_000, 8_000_000_000, 2, False, False, 10),
+            TableProfile("public", "organizations", 50_000, 25_000_000, 3, False, True, 16),
+            TableProfile("geo", "locations", 2_000_000, 800_000_000, 3, False, True, 8),
+            TableProfile("geo", "boundaries", 100_000, 500_000_000, 1, False, False, 4),
+        ]
+        functions = [
+            FunctionInfo("public", "update_search_index", "plpgsql", True, 12),
+            FunctionInfo("public", "compute_similarity", "plpgsql", False, 35),
+            FunctionInfo("public", "archive_search_logs", "plpgsql", False, 50),
+            FunctionInfo("geo", "find_nearby", "sql", False, 10),
+        ]
+        triggers = [
+            TriggerInfo("public", "documents", "trg_doc_search_idx", "INSERT OR UPDATE", "AFTER", "update_search_index"),
+        ]
+        total_size = sum(t.size_bytes for t in tables)
+        return DatabaseProfile(
+            name=db_name, size_bytes=total_size,
+            size_gb=round(total_size / (1024 ** 3), 2),
+            table_count=len(tables), schema_count=2, schemas=["public", "geo"],
+            tables=tables, extensions=extensions, functions=functions, triggers=triggers,
+            sequence_count=7, materialized_view_count=2, custom_type_count=1,
+            foreign_key_count=5, has_logical_replication=False, replication_slots=[],
+            pg_version="16.4",
+        )
+
+    def _mock_discover_azure(self, db_name: str) -> DatabaseProfile:
+        """Mock Azure Flexible Server profile - Azure extensions, Entra ID auth."""
+        extensions = [
+            ExtensionInfo("pg_stat_statements", "1.10", True),
+            ExtensionInfo("pgvector", "0.7.0", True),
+            ExtensionInfo("pg_trgm", "1.6", True),
+            ExtensionInfo("pgcrypto", "1.3", True),
+            ExtensionInfo("uuid-ossp", "1.1", True),
+            ExtensionInfo("citext", "1.6", True),
+            ExtensionInfo("hstore", "1.8", True),
+            ExtensionInfo("azure_storage", "1.5", False, "Replace with Databricks SDK for Azure Blob access"),
+            ExtensionInfo("azure_ai", "1.0", False, "Replace with Databricks Foundation Model API"),
+            ExtensionInfo("age", "1.5.0", False, "Not supported; use GraphFrames or Delta Lake for graph workloads"),
+            ExtensionInfo("pg_cron", "1.6", False, "Replace with Databricks Jobs"),
+        ]
+        tables = [
+            TableProfile("public", "patients", 1_500_000, 750_000_000, 6, False, True, 22),
+            TableProfile("public", "records", 20_000_000, 10_000_000_000, 5, True, True, 30),
+            TableProfile("public", "appointments", 8_000_000, 3_200_000_000, 4, True, True, 14),
+            TableProfile("public", "providers", 50_000, 25_000_000, 3, False, True, 18),
+            TableProfile("graph", "relationships", 5_000_000, 2_000_000_000, 2, False, True, 6),
+            TableProfile("graph", "nodes", 2_000_000, 800_000_000, 3, False, False, 8),
+        ]
+        functions = [
+            FunctionInfo("public", "validate_record", "plpgsql", True, 20),
+            FunctionInfo("public", "generate_report", "plpgsql", False, 75),
+            FunctionInfo("public", "schedule_appointment", "plpgsql", False, 40),
+            FunctionInfo("graph", "traverse_path", "plpgsql", False, 60),
+        ]
+        triggers = [
+            TriggerInfo("public", "records", "trg_record_validate", "INSERT OR UPDATE", "BEFORE", "validate_record"),
+            TriggerInfo("public", "appointments", "trg_appt_audit", "INSERT OR UPDATE OR DELETE", "AFTER", "validate_record"),
+        ]
+        total_size = sum(t.size_bytes for t in tables)
+        return DatabaseProfile(
+            name=db_name, size_bytes=total_size,
+            size_gb=round(total_size / (1024 ** 3), 2),
+            table_count=len(tables), schema_count=2, schemas=["public", "graph"],
+            tables=tables, extensions=extensions, functions=functions, triggers=triggers,
+            sequence_count=8, materialized_view_count=4, custom_type_count=3,
+            foreign_key_count=7, has_logical_replication=False, replication_slots=[],
+            pg_version="16.8",
+        )
+
+    def _mock_discover_self_managed(self, db_name: str) -> DatabaseProfile:
+        """Mock self-managed PostgreSQL - complex setup with many unsupported extensions."""
+        extensions = [
+            ExtensionInfo("pg_stat_statements", "1.10", True),
+            ExtensionInfo("postgis", "3.3.0", True),
+            ExtensionInfo("pg_trgm", "1.6", True),
+            ExtensionInfo("pgcrypto", "1.3", True),
+            ExtensionInfo("uuid-ossp", "1.1", True),
+            ExtensionInfo("hstore", "1.8", True),
+            ExtensionInfo("timescaledb", "2.14.0", False, "Not available; use standard partitioning or Delta Lake for time-series"),
+            ExtensionInfo("citus", "12.1", False, "No distributed/sharded tables in Lakebase"),
+            ExtensionInfo("pglogical", "2.4.4", False, "No logical replication in Lakebase; use Lakeflow Connect"),
+            ExtensionInfo("pg_repack", "1.5.0", False, "Use VACUUM FULL + REINDEX CONCURRENTLY"),
+            ExtensionInfo("pg_cron", "1.6", False, "Replace with Databricks Jobs"),
+            ExtensionInfo("wal2json", "2.5", False, "No WAL-based CDC; use Lakeflow Connect"),
+            ExtensionInfo("pgaudit", "16.0", False, "Use pg_stat_statements or Databricks audit logs"),
+        ]
+        tables = [
+            TableProfile("public", "events", 500_000_000, 200_000_000_000, 4, True, True, 12),
+            TableProfile("public", "metrics", 800_000_000, 320_000_000_000, 3, False, False, 8),
+            TableProfile("public", "users", 5_000_000, 2_500_000_000, 6, False, True, 20),
+            TableProfile("public", "sessions", 50_000_000, 20_000_000_000, 2, False, True, 10),
+            TableProfile("public", "configs", 1_000, 100_000, 1, False, False, 15),
+            TableProfile("ts", "raw_metrics", 1_000_000_000, 400_000_000_000, 2, False, False, 6),
+            TableProfile("ts", "rollup_hourly", 100_000_000, 40_000_000_000, 1, False, False, 6),
+            TableProfile("shard", "tenant_data", 200_000_000, 80_000_000_000, 4, False, True, 14),
+        ]
+        functions = [
+            FunctionInfo("public", "update_modified", "plpgsql", True, 6),
+            FunctionInfo("public", "partition_maintenance", "plpgsql", False, 120),
+            FunctionInfo("public", "compute_aggregates", "plpgsql", False, 200),
+            FunctionInfo("ts", "continuous_aggregate", "plpgsql", False, 150),
+            FunctionInfo("ts", "retention_policy", "plpgsql", False, 80),
+            FunctionInfo("shard", "route_query", "plpgsql", False, 90),
+        ]
+        triggers = [
+            TriggerInfo("public", "events", "trg_events_modified", "INSERT", "AFTER", "update_modified"),
+            TriggerInfo("public", "metrics", "trg_metrics_partition", "INSERT", "BEFORE", "partition_maintenance"),
+        ]
+        total_size = sum(t.size_bytes for t in tables)
+        return DatabaseProfile(
+            name=db_name, size_bytes=total_size,
+            size_gb=round(total_size / (1024 ** 3), 2),
+            table_count=len(tables), schema_count=3, schemas=["public", "ts", "shard"],
+            tables=tables, extensions=extensions, functions=functions, triggers=triggers,
+            sequence_count=15, materialized_view_count=6, custom_type_count=5,
+            foreign_key_count=4, has_logical_replication=True,
+            replication_slots=["pglogical_subscriber_1", "wal2json_cdc"],
+            pg_version="14.10", event_trigger_count=2, large_object_count=15,
+            partition_strategies=["range", "hash"],
+        )
+
+    def _mock_discover_alloydb(self, db_name: str) -> DatabaseProfile:
+        """Mock AlloyDB for PostgreSQL profile - columnar engine, google_ml_integration."""
+        extensions = [
+            ExtensionInfo("pg_stat_statements", "1.10", True),
+            ExtensionInfo("pgvector", "0.7.0", True),
+            ExtensionInfo("postgis", "3.4.0", True),
+            ExtensionInfo("pg_trgm", "1.6", True),
+            ExtensionInfo("pgcrypto", "1.3", True),
+            ExtensionInfo("uuid-ossp", "1.1", True),
+            ExtensionInfo("google_ml_integration", "1.3", False, "Use Databricks Foundation Model API"),
+            ExtensionInfo("pg_cron", "1.6", False, "Replace with Databricks Jobs"),
+        ]
+        tables = [
+            TableProfile("public", "users", 4_000_000, 2_000_000_000, 5, False, True, 16),
+            TableProfile("public", "transactions", 30_000_000, 16_000_000_000, 7, True, True, 20),
+            TableProfile("public", "products", 800_000, 400_000_000, 5, False, True, 18),
+            TableProfile("public", "recommendations", 10_000_000, 8_000_000_000, 3, False, True, 6),
+            TableProfile("analytics", "events", 80_000_000, 35_000_000_000, 3, False, False, 12),
+            TableProfile("analytics", "sessions", 20_000_000, 8_000_000_000, 2, False, True, 10),
+            TableProfile("ml", "embeddings", 10_000_000, 30_000_000_000, 1, False, False, 3),
+        ]
+        functions = [
+            FunctionInfo("public", "update_modified", "plpgsql", True, 8),
+            FunctionInfo("public", "compute_recommendations", "plpgsql", False, 45),
+            FunctionInfo("analytics", "aggregate_events", "plpgsql", False, 60),
+            FunctionInfo("ml", "predict_churn", "sql", False, 15),
+        ]
+        triggers = [
+            TriggerInfo("public", "transactions", "trg_txn_modified", "INSERT OR UPDATE", "BEFORE", "update_modified"),
+        ]
+        total_size = sum(t.size_bytes for t in tables)
+        return DatabaseProfile(
+            name=db_name, size_bytes=total_size,
+            size_gb=round(total_size / (1024 ** 3), 2),
+            table_count=len(tables), schema_count=3, schemas=["public", "analytics", "ml"],
+            tables=tables, extensions=extensions, functions=functions, triggers=triggers,
+            sequence_count=10, materialized_view_count=3, custom_type_count=1,
+            foreign_key_count=6, has_logical_replication=False, replication_slots=[],
+            pg_version="15.7",
+        )
+
+    def _mock_discover_supabase(self, db_name: str) -> DatabaseProfile:
+        """Mock Supabase PostgreSQL profile - auth/storage schemas, realtime, pg_graphql."""
+        extensions = [
+            ExtensionInfo("pg_stat_statements", "1.10", True),
+            ExtensionInfo("pgvector", "0.7.0", True),
+            ExtensionInfo("pg_trgm", "1.6", True),
+            ExtensionInfo("pgcrypto", "1.3", True),
+            ExtensionInfo("uuid-ossp", "1.1", True),
+            ExtensionInfo("pg_graphql", "1.5.0", True),
+            ExtensionInfo("pgjwt", "0.2.0", False, "Implement JWT validation in application layer"),
+            ExtensionInfo("pg_cron", "1.6", False, "Replace with Databricks Jobs"),
+            ExtensionInfo("pg_tle", "1.3.0", False, "Custom TLE extensions must be evaluated individually"),
+        ]
+        tables = [
+            TableProfile("public", "profiles", 500_000, 250_000_000, 4, False, True, 12),
+            TableProfile("public", "posts", 3_000_000, 1_500_000_000, 5, True, True, 16),
+            TableProfile("public", "comments", 8_000_000, 3_200_000_000, 3, False, True, 10),
+            TableProfile("public", "likes", 15_000_000, 4_500_000_000, 2, False, True, 4),
+            TableProfile("public", "messages", 6_000_000, 2_400_000_000, 3, False, True, 8),
+            TableProfile("public", "notifications", 10_000_000, 3_000_000_000, 2, False, True, 6),
+        ]
+        functions = [
+            FunctionInfo("public", "handle_new_user", "plpgsql", True, 20),
+            FunctionInfo("public", "update_post_count", "plpgsql", True, 10),
+            FunctionInfo("public", "search_posts", "sql", False, 15),
+        ]
+        triggers = [
+            TriggerInfo("public", "posts", "trg_post_count", "INSERT OR DELETE", "AFTER", "update_post_count"),
+        ]
+        total_size = sum(t.size_bytes for t in tables)
+        return DatabaseProfile(
+            name=db_name, size_bytes=total_size,
+            size_gb=round(total_size / (1024 ** 3), 2),
+            table_count=len(tables), schema_count=1, schemas=["public"],
+            tables=tables, extensions=extensions, functions=functions, triggers=triggers,
+            sequence_count=6, materialized_view_count=1, custom_type_count=0,
+            foreign_key_count=5, has_logical_replication=False, replication_slots=[],
+            pg_version="15.6",
+        )
+
     def _live_discover(self, endpoint: str, database: str, user: str = "", password: str = "") -> DatabaseProfile:
         """Connect to a live source database and discover its schema."""
         try:
-            from e2e_test.live_connector import live_discover
-            return live_discover(endpoint, 5432, database, user, password)
+            import psycopg
         except ImportError:
-            logger.warning("e2e_test.live_connector not available - returning mock data")
+            logger.warning("psycopg not installed - returning mock data")
+            return self._mock_discover(database)
+
+        try:
+            with psycopg.connect(
+                host=endpoint, port=5432, dbname=database,
+                user=user, password=password, sslmode="require",
+                options="-c statement_timeout=30000",
+            ) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT version()")
+                    pg_version = (cur.fetchone()[0] or "").split()[1] if cur.rowcount else "unknown"
+
+                    cur.execute(aq.DISCOVER_TABLES)
+                    tables = [
+                        TableProfile(
+                            schema_name=r[0], table_name=r[1],
+                            row_count=int(r[3] or 0),
+                            size_bytes=int(r[4] or 0),
+                            index_count=int(r[6] or 0),
+                            has_triggers=False,
+                            has_foreign_keys=int(r[3] or 0) > 0,
+                            column_count=int(r[7] or 0),
+                        )
+                        for r in cur.fetchall()
+                    ]
+
+                    cur.execute(aq.DISCOVER_EXTENSIONS)
+                    extensions = [
+                        ExtensionInfo(r[0], r[1], r[0] in LAKEBASE_SUPPORTED_EXTENSIONS,
+                                      EXTENSION_WORKAROUNDS.get(r[0], ""))
+                        for r in cur.fetchall()
+                    ]
+
+                    cur.execute(aq.DISCOVER_FUNCTIONS)
+                    functions = [FunctionInfo(r[0], r[1], r[2], False, 0) for r in cur.fetchall()]
+
+                    cur.execute(aq.DISCOVER_TRIGGERS)
+                    triggers = [
+                        TriggerInfo(
+                            schema_name=r[0], table_name=r[1],
+                            trigger_name=r[2], event="", timing="",
+                            function_name=r[3] if len(r) > 3 else "",
+                        )
+                        for r in cur.fetchall()
+                    ]
+
+                    cur.execute(aq.DISCOVER_SCHEMAS)
+                    schemas = [r[0] for r in cur.fetchall()]
+
+                    cur.execute(aq.DISCOVER_SEQUENCES)
+                    seq_count = len(cur.fetchall())
+
+                    cur.execute(aq.DISCOVER_MATERIALIZED_VIEWS)
+                    matview_count = len(cur.fetchall())
+
+                    cur.execute(aq.DISCOVER_CUSTOM_TYPES)
+                    custom_type_count = len(cur.fetchall())
+
+                    cur.execute(aq.DISCOVER_FOREIGN_KEYS)
+                    fk_count = len(cur.fetchall())
+
+                    total_size = sum(t.size_bytes for t in tables)
+
+                    return DatabaseProfile(
+                        name=database,
+                        size_bytes=total_size,
+                        size_gb=round(total_size / (1024 ** 3), 2),
+                        table_count=len(tables),
+                        schema_count=len(schemas),
+                        schemas=schemas,
+                        tables=tables,
+                        extensions=extensions,
+                        functions=functions,
+                        triggers=triggers,
+                        sequence_count=seq_count,
+                        materialized_view_count=matview_count,
+                        custom_type_count=custom_type_count,
+                        foreign_key_count=fk_count,
+                        has_logical_replication=False,
+                        replication_slots=[],
+                        pg_version=pg_version,
+                    )
+        except Exception as e:
+            logger.error(f"Live discover failed: {e}")
             return self._mock_discover(database)
 
     def _live_workload(self, profile_data: dict, user: str = "", password: str = "") -> WorkloadProfile:
         """Profile workload from a live source database."""
         try:
-            from e2e_test.live_connector import live_workload
-            profile = profile_data.get("_profile") if profile_data else None
-            if profile:
-                return live_workload(profile.source_endpoint, 5432, profile.databases[0].name, user, password)
+            import psycopg
+        except ImportError:
+            logger.warning("psycopg not installed - returning mock data")
+            return self._mock_workload()
+
+        profile = profile_data.get("_profile") if profile_data else None
+        if not profile or not profile.databases:
             logger.warning("No profile data for live workload - returning mock data")
             return self._mock_workload()
-        except ImportError:
-            logger.warning("e2e_test.live_connector not available - returning mock data")
+
+        endpoint = profile.source_endpoint
+        database = profile.databases[0].name
+
+        try:
+            with psycopg.connect(
+                host=endpoint, port=5432, dbname=database,
+                user=user, password=password, sslmode="require",
+                options="-c statement_timeout=30000",
+            ) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(aq.PROFILE_WORKLOAD)
+                    row = cur.fetchone()
+                    if not row:
+                        return self._mock_workload()
+
+                    cur.execute(aq.PROFILE_TOP_QUERIES)
+                    top_queries = [
+                        {"query": r[0][:200], "calls": r[1], "mean_ms": float(r[2])}
+                        for r in cur.fetchall()
+                    ]
+
+                    cur.execute(aq.PROFILE_HOT_TABLES)
+                    hot_tables = [r[0] for r in cur.fetchall()]
+
+                    cur.execute(aq.PROFILE_CONNECTIONS)
+                    conn_row = cur.fetchone()
+                    conn_avg = conn_row[0] if conn_row else 0
+                    conn_peak = conn_row[1] if conn_row else 0
+
+                    return WorkloadProfile(
+                        total_queries=int(row[0] or 0),
+                        total_calls=int(row[1] or 0),
+                        reads_pct=float(row[2] or 50),
+                        writes_pct=float(row[3] or 50),
+                        avg_qps=float(row[4] or 0),
+                        peak_qps=float(row[5] or 0),
+                        avg_tps=float(row[6] or 0),
+                        p99_latency_ms=float(row[7] or 0),
+                        top_queries=top_queries,
+                        hot_tables=hot_tables,
+                        connection_count_avg=int(conn_avg),
+                        connection_count_peak=int(conn_peak),
+                    )
+        except Exception as e:
+            logger.error(f"Live workload profiling failed: {e}")
             return self._mock_workload()

@@ -8,7 +8,7 @@ router = APIRouter(prefix="/api/operations", tags=["operations"])
 
 # -- Vacuum ------------------------------------------------------------------
 
-@router.get("/vacuum")
+@router.get("/vacuum", operation_id="vacuum_history")
 def vacuum_history(days: int = Query(7, ge=1, le=30)):
     """Vacuum operations grouped by date and type."""
     def fetch():
@@ -29,7 +29,7 @@ def vacuum_history(days: int = Query(7, ge=1, le=30)):
 
 # -- Sync --------------------------------------------------------------------
 
-@router.get("/sync")
+@router.get("/sync", operation_id="sync_status")
 def sync_status():
     """Latest sync validation status for every table pair."""
     def fetch():
@@ -51,7 +51,7 @@ def sync_status():
 
 # -- Branches ----------------------------------------------------------------
 
-@router.get("/branches")
+@router.get("/branches", operation_id="branch_activity")
 def branch_activity():
     """Branch lifecycle events over the last 30 days."""
     def fetch():
@@ -70,7 +70,7 @@ def branch_activity():
 
 # -- Archival ----------------------------------------------------------------
 
-@router.get("/archival")
+@router.get("/archival", operation_id="archival_summary")
 def archival_summary():
     """Cold-data archival operations summary."""
     def fetch():

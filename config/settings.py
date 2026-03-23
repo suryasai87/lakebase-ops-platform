@@ -3,6 +3,8 @@ LakebaseOps Platform Configuration
 Centralized settings for all agents, jobs, and utilities.
 """
 
+import os
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -178,12 +180,12 @@ LAKEBASE_CONSTRAINTS = {
     "pg_versions": ["16", "17"],
 }
 
-# Workspace defaults
-WORKSPACE_HOST = "fe-vm-hls-amer.cloud.databricks.com"
-DEFAULT_CATALOG = "hls_amer_catalog"
-OPS_CATALOG = "hls_amer_catalog"  # Using hls_amer_catalog (ops_catalog requires managed storage)
-OPS_SCHEMA = "lakebase_ops"
-ARCHIVE_SCHEMA = "lakebase_archive"
+# Workspace defaults (override via environment variables)
+WORKSPACE_HOST = os.getenv("DATABRICKS_HOST", "")
+DEFAULT_CATALOG = os.getenv("OPS_CATALOG", "ops_catalog")
+OPS_CATALOG = os.getenv("OPS_CATALOG", "ops_catalog")
+OPS_SCHEMA = os.getenv("OPS_SCHEMA", "lakebase_ops")
+ARCHIVE_SCHEMA = os.getenv("ARCHIVE_SCHEMA", "lakebase_archive")
 
 # Delta table destinations for operational data
 DELTA_TABLES = {
@@ -205,23 +207,22 @@ JOB_SCHEDULES = {
     "sync_validator": "*/15 * * * *",       # Every 15 minutes
     "branch_manager": "0 */6 * * *",        # Every 6 hours
     "cold_archiver": "0 3 * * 0",           # Weekly Sunday 3 AM
-    "connection_monitor": "* * * * *",       # Every minute
     "cost_tracker": "0 6 * * *",            # Daily 6 AM
 }
 
-# Real Lakebase infrastructure (discovered)
-LAKEBASE_PROJECT_ID = "83eb266d-27f8-4467-a7df-2b048eff09d7"
-LAKEBASE_PROJECT_NAME = "surya_lakebase_auto"
-LAKEBASE_DEFAULT_BRANCH = "br-shiny-math-d28d0cd4"
-LAKEBASE_ENDPOINT_HOST = "ep-hidden-haze-d2v9brhq.database.us-east-1.cloud.databricks.com"
-LAKEBASE_ENDPOINT_PORT = 5432
-LAKEBASE_DB_NAME = "databricks_postgres"
-LAKEBASE_PG_VERSION = 17
+# Lakebase infrastructure (configure via environment variables)
+LAKEBASE_PROJECT_ID = os.getenv("LAKEBASE_PROJECT_ID", "")
+LAKEBASE_PROJECT_NAME = os.getenv("LAKEBASE_PROJECT_NAME", "")
+LAKEBASE_DEFAULT_BRANCH = os.getenv("LAKEBASE_DEFAULT_BRANCH", "production")
+LAKEBASE_ENDPOINT_HOST = os.getenv("LAKEBASE_ENDPOINT_HOST", "")
+LAKEBASE_ENDPOINT_PORT = int(os.getenv("LAKEBASE_ENDPOINT_PORT", "5432"))
+LAKEBASE_DB_NAME = os.getenv("LAKEBASE_DB_NAME", "databricks_postgres")
+LAKEBASE_PG_VERSION = int(os.getenv("LAKEBASE_PG_VERSION", "17"))
 LAKEBASE_CU_RANGE = (8, 16)
 
 # SQL Warehouse for DDL/DML execution
-SQL_WAREHOUSE_ID = "8e4258d7fe74671b"
-SQL_WAREHOUSE_NAME = "Serverless Demo"
+SQL_WAREHOUSE_ID = os.getenv("SQL_WAREHOUSE_ID", "")
+SQL_WAREHOUSE_NAME = os.getenv("SQL_WAREHOUSE_NAME", "")
 
 # Branch naming for test environment
 TEST_BRANCHES = {
@@ -229,5 +230,5 @@ TEST_BRANCHES = {
     "development": {"source": LAKEBASE_DEFAULT_BRANCH, "ttl": 604800, "protected": False},
     "ci-pr-1": {"source": LAKEBASE_DEFAULT_BRANCH, "ttl": 14400, "protected": False},
     "feat-perf-test": {"source": LAKEBASE_DEFAULT_BRANCH, "ttl": 604800, "protected": False},
-    "dev-surya": {"source": LAKEBASE_DEFAULT_BRANCH, "ttl": 604800, "protected": False},
+    "dev-user": {"source": LAKEBASE_DEFAULT_BRANCH, "ttl": 604800, "protected": False},
 }

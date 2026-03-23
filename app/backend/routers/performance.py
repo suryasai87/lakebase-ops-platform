@@ -6,7 +6,7 @@ from ..services.sql_service import execute_query, fqn, get_cached
 router = APIRouter(prefix="/api/performance", tags=["performance"])
 
 
-@router.get("/queries")
+@router.get("/queries", operation_id="slow_queries")
 def slow_queries(
     hours: int = Query(24, ge=1, le=168),
     limit: int = Query(10, ge=1, le=50),
@@ -31,7 +31,7 @@ def slow_queries(
     return get_cached(f"slow_queries_{hours}_{limit}", fetch, ttl=60)
 
 
-@router.get("/regressions")
+@router.get("/regressions", operation_id="performance_regressions")
 def regressions():
     """Detect query performance regressions (last 2h vs previous day)."""
     def fetch():

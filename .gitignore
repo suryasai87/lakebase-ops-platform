@@ -53,6 +53,7 @@ Thumbs.db
 node_modules/
 tsconfig.tsbuildinfo
 app/static/
+bun.lock
 
 # E2E test artifacts (contains live credentials, AWS resource IDs)
 e2e_test/

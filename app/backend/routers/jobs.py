@@ -1,25 +1,35 @@
 """Jobs router — trigger LakebaseOps sync jobs and poll run status."""
 
+import json
 import logging
+import os
+
 from fastapi import APIRouter
 from ..services.sql_service import get_client
 
 logger = logging.getLogger("lakebase_ops_app.jobs")
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
-# All 7 LakebaseOps job IDs
+# Job IDs are workspace-specific. Configure via LAKEBASE_JOB_IDS env var
+# as JSON: {"metric_collector": 123, "index_analyzer": 456, ...}
+_job_ids_raw = os.getenv("LAKEBASE_JOB_IDS", "{}")
+try:
+    _job_ids = json.loads(_job_ids_raw)
+except json.JSONDecodeError:
+    _job_ids = {}
+
 LAKEBASE_JOBS = {
-    "metric_collector": {"job_id": 205010800477517, "name": "Metric Collector"},
-    "index_analyzer": {"job_id": 405039178411009, "name": "Index Analyzer"},
-    "vacuum_scheduler": {"job_id": 594266613956568, "name": "Vacuum Scheduler"},
-    "sync_validator": {"job_id": 462158184008431, "name": "Sync Validator"},
-    "branch_manager": {"job_id": 676577590162017, "name": "Branch Manager"},
-    "cold_archiver": {"job_id": 120897564762964, "name": "Cold Data Archiver"},
-    "cost_tracker": {"job_id": 1114339309161416, "name": "Cost Tracker"},
+    "metric_collector": {"job_id": _job_ids.get("metric_collector", 0), "name": "Metric Collector"},
+    "index_analyzer": {"job_id": _job_ids.get("index_analyzer", 0), "name": "Index Analyzer"},
+    "vacuum_scheduler": {"job_id": _job_ids.get("vacuum_scheduler", 0), "name": "Vacuum Scheduler"},
+    "sync_validator": {"job_id": _job_ids.get("sync_validator", 0), "name": "Sync Validator"},
+    "branch_manager": {"job_id": _job_ids.get("branch_manager", 0), "name": "Branch Manager"},
+    "cold_archiver": {"job_id": _job_ids.get("cold_archiver", 0), "name": "Cold Data Archiver"},
+    "cost_tracker": {"job_id": _job_ids.get("cost_tracker", 0), "name": "Cost Tracker"},
 }
 
 
-@router.get("/list")
+@router.get("/list", operation_id="list_jobs")
 def list_jobs():
     """List all LakebaseOps jobs with their current status."""
     results = []
@@ -47,7 +57,7 @@ def list_jobs():
     return {"jobs": results}
 
 
-@router.post("/sync")
+@router.post("/sync", operation_id="trigger_sync")
 def trigger_sync():
     """Trigger all 7 LakebaseOps jobs to refresh Delta tables."""
     triggered = []
@@ -84,7 +94,7 @@ def trigger_sync():
     }
 
 
-@router.get("/sync/status")
+@router.get("/sync/status", operation_id="poll_sync_status")
 def poll_sync_status(run_ids: str = ""):
     """Poll status for multiple run IDs (comma-separated)."""
     if not run_ids:

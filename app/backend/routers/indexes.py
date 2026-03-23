@@ -22,7 +22,7 @@ def _fetch_recommendations():
     return execute_query(sql)
 
 
-@router.get("/recommendations")
+@router.get("/recommendations", operation_id="index_recommendations")
 def index_recommendations():
     """Index recommendation summary by type and confidence."""
     return get_cached("index_recommendations", _fetch_recommendations, ttl=300)

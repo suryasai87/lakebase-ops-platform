@@ -1,14 +1,25 @@
-import { Grid, Typography, Box, CircularProgress } from "@mui/material";
+import { Grid, Typography, Box, Skeleton, Alert } from "@mui/material";
 import AgentCard from "../components/AgentCard";
 import { useApiData } from "../hooks/useApiData";
 
 export default function Agents() {
-  const { data: agents, loading } = useApiData<any[]>("/api/agents/summary");
+  const { data: agents, loading, error } = useApiData<any[]>("/api/agents/summary");
+
+  if (error) {
+    return <Alert severity="error" sx={{ mt: 2 }}>Failed to load agents: {error}</Alert>;
+  }
 
   if (loading) {
     return (
-      <Box sx={{ display: "flex", justifyContent: "center", mt: 10 }}>
-        <CircularProgress color="primary" />
+      <Box>
+        <Skeleton variant="text" width={200} height={40} sx={{ mb: 2 }} />
+        <Grid container spacing={3}>
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Grid item xs={12} md={4} key={i}>
+              <Skeleton variant="rounded" height={200} />
+            </Grid>
+          ))}
+        </Grid>
       </Box>
     );
   }

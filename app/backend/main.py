@@ -5,10 +5,10 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lakebase_ops_app")
@@ -32,17 +32,28 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_cors_raw = os.getenv("CORS_ORIGINS", "")
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_raw else ["*"]
+_cors_credentials = _cors_origins != ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Catch unhandled exceptions and return a safe error response."""
+    logger.error(f"Unhandled error on {request.url.path}: {exc}", exc_info=True)
+    return JSONResponse(status_code=500, content={"error": "Internal server error"})
+
+
 # Register API routers
 try:
-    from .routers import health, agents, metrics, performance, indexes, operations, lakebase, jobs
+    from .routers import health, agents, metrics, performance, indexes, operations, lakebase, jobs, assessment
 
     app.include_router(health.router)
     app.include_router(agents.router)
@@ -52,6 +63,7 @@ try:
     app.include_router(operations.router)
     app.include_router(lakebase.router)
     app.include_router(jobs.router)
+    app.include_router(assessment.router)
     logger.info("All routers registered successfully")
 except Exception as e:
     logger.error(f"Failed to import/register routers: {e}", exc_info=True)
@@ -102,5 +114,9 @@ else:
                 "/api/operations/branches",
                 "/api/operations/archival",
                 "/api/lakebase/realtime",
+                "/api/assessment/discover",
+                "/api/assessment/profile",
+                "/api/assessment/readiness",
+                "/api/assessment/blueprint",
             ],
         }

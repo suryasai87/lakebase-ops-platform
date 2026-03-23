@@ -7,15 +7,15 @@
 
 import sys, os
 sys.path.insert(0, "/Workspace/Repos/lakebase-ops")
-os.environ.setdefault("OPS_CATALOG", "hls_amer_catalog")
+os.environ.setdefault("OPS_CATALOG", "ops_catalog")
 os.environ.setdefault("OPS_SCHEMA", "lakebase_ops")
 
 # COMMAND ----------
 
 from agents.health_agent import HealthAgent
-from config.settings import SETTINGS
+from config import settings
 
-project_id = dbutils.widgets.get("project_id") if "dbutils" in dir() else SETTINGS.LAKEBASE_PROJECT_ID
+project_id = dbutils.widgets.get("project_id") if "dbutils" in dir() else settings.LAKEBASE_PROJECT_ID
 branch_id = dbutils.widgets.get("branch_id") if "dbutils" in dir() else "production"
 
 agent = HealthAgent()
