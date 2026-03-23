@@ -1,14 +1,34 @@
 # LakebaseOps: Autonomous Lakebase Database Operations Platform
 
+> **v2.1** | 3 Agents | 51 Tools | 7 Source Engines | PostgreSQL 17
+
 **Automated DBA Operations, Monitoring & OLTP-to-OLAP Lifecycle Management**
 
 A multi-agent system that automates critical DBA tasks for Databricks Lakebase (managed PostgreSQL 17), reducing DBA toil from 20+ hours/week to under 5 hours and MTTR from 4+ hours to under 30 minutes.
 
 ---
 
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Monitoring App Pages](#monitoring-app-pages)
+- [Project Structure](#project-structure-v2--modular-mixin-architecture)
+- [Alert Thresholds](#alert-thresholds-fr-04)
+- [Success Metrics](#success-metrics)
+- [PG17 Features Leveraged](#pg17-features-leveraged)
+- [Scheduled Jobs](#scheduled-jobs-databricks-jobs)
+- [API Endpoints](#job-api-endpoints-app-backend)
+- [Pricing Configuration](#pricing-configuration-configpricingpy)
+- [Key Design Decisions](#key-design-decisions)
+- [Development](#development)
+- [Changelog](#changelog)
+
+---
+
 ## Architecture
 
-The platform consists of **3 collaborative AI agents** (47+ tools total) coordinated by an `AgentFramework`, with a modular mixin-based architecture:
+The platform consists of **3 collaborative AI agents** (51 tools total) coordinated by an `AgentFramework`, with a modular mixin-based architecture:
 
 ```
                          +----------------------+
@@ -21,7 +41,7 @@ The platform consists of **3 collaborative AI agents** (47+ tools total) coordin
                |                    |                    |
     +----------+----------+  +-----+----------+  +-----+----------+
     |  Provisioning Agent |  | Performance    |  |  Health Agent   |
-    |     (17+ tools)     |  | Agent (14)     |  |    (16 tools)   |
+    |     (21 tools)      |  | Agent (14)     |  |    (16 tools)   |
     |  Day 0 / Day 1      |  |  Day 1+        |  |    Day 2        |
     +---------------------+  +----------------+  +----------------+
     | ProjectMixin        |  | MetricsMixin   |  | MonitoringMixin|
@@ -79,9 +99,9 @@ The `AssessmentMixin` provides a 4-step pipeline for evaluating external Postgre
 | Supabase PostgreSQL | Multi | `pg_graphql`, `pgjwt`, platform-managed auth/storage/realtime schemas |
 | Self-Managed PostgreSQL | Any | Full extension control, `timescaledb`, `citus`, `pglogical` |
 
-### Agent 1: Provisioning & DevOps (17 tools)
+### Agent 1: Provisioning & DevOps (21 tools)
 
-Automates "Day 0" and "Day 1" — the 59 setup tasks from the Enterprise Lakebase Design Guide:
+Automates "Day 0" and "Day 1" - the 59 setup tasks from the Enterprise Lakebase Design Guide, plus the 4-step migration assessment pipeline:
 
 | Tool | Module | Description | PRD Reference |
 |------|--------|-------------|---------------|
@@ -153,14 +173,23 @@ Continuous monitoring with **8 alerting thresholds**, **pg_stat_io/wal collectio
 
 ---
 
+## Prerequisites
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| Python | >= 3.10 | Backend, agents, simulation |
+| [uv](https://docs.astral.sh/uv/) | latest | Python package manager |
+| [Bun](https://bun.sh/) | latest | Frontend package manager |
+| [Databricks CLI](https://docs.databricks.com/dev-tools/cli/install.html) | >= 0.200 | Workspace deployment and job management |
+
 ## Quick Start
 
 ### Local Simulation (no external dependencies)
 
 ```bash
 cd lakebase-ops-platform
-pip install -r requirements.txt
-python main.py
+uv sync
+uv run python main.py
 ```
 
 Output demonstrates all 5 PRD phases:
@@ -173,31 +202,42 @@ Output demonstrates all 5 PRD phases:
 ### Deploy to Databricks Apps
 
 1. **Configure environment** - Copy `.env.example` to `.env` and fill in your workspace values:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your Databricks workspace host, Lakebase project ID,
-   # SQL warehouse ID, and catalog/schema names
-   ```
+
+```bash
+cp .env.example .env
+```
+
+Required variables (see `.env.example` for full list):
+
+| Variable | Description |
+|----------|-------------|
+| `DATABRICKS_HOST` | Workspace URL (e.g., `your-workspace.cloud.databricks.com`) |
+| `LAKEBASE_PROJECT_ID` | Lakebase project ID |
+| `SQL_WAREHOUSE_ID` | SQL warehouse for Delta queries |
+| `LAKEBASE_ENDPOINT_HOST` | Lakebase endpoint hostname |
 
 2. **Build the frontend**:
-   ```bash
-   cd app/frontend
-   bun install
-   bun run build
-   cd ../..
-   ```
+
+```bash
+cd app/frontend
+bun install
+bun run build
+cd ../..
+```
 
 3. **Deploy** - Upload the `app/` directory to your Databricks workspace and deploy:
-   ```bash
-   databricks apps deploy <app-name> \
-     --source-code-path /Workspace/Users/<you>/<app-source> \
-     --profile <your-profile>
-   ```
+
+```bash
+databricks apps deploy <app-name> \
+  --source-code-path /Workspace/Users/<you>/<app-source> \
+  --profile <your-profile>
+```
 
 4. **Create scheduled jobs** (optional) - Deploy the 7 Databricks Jobs for continuous monitoring:
-   ```bash
-   python jobs/databricks_job_definitions.py
-   ```
+
+```bash
+uv run python jobs/databricks_job_definitions.py
+```
 
 ### Monitoring App Pages
 
@@ -221,16 +261,19 @@ After running the 4-step assessment pipeline, the Assessment page displays three
 
 ---
 
-## Project Structure (V2 — Modular Mixin Architecture)
+## Project Structure (V2.1 - Modular Mixin Architecture)
 
 ```
 lakebase-ops-platform/
+├── pyproject.toml                       # Python project config (uv/pip, ruff, pytest)
+├── uv.lock                              # Locked dependency versions
 ├── main.py                              # Full 5-phase simulation orchestrator
-├── deploy_and_test.py                   # Real deployment + 81+ test suite
+├── deploy_and_test.py                   # Real deployment + test suite
 ├── test_assessment.py                   # Assessment pipeline unit tests
 ├── .env.example                         # Environment variable template
 ├── README.md                            # This file
 ├── PRD_V2_ARCHITECTURE.md              # V2 architecture reference
+├── ENHANCED_PROMPT.md                   # Original PRD (historical reference)
 |
 ├── app/                                 # Databricks App (FastAPI + React)
 │   ├── app.yaml                         # Databricks Apps deployment config
@@ -265,7 +308,7 @@ lakebase-ops-platform/
 │   └── assessment_queries.py            # Assessment discovery + profiling SQL
 |
 ├── agents/
-│   ├── provisioning/                    # 17+ tools across 7 mixins
+│   ├── provisioning/                    # 21 tools across 7 mixins
 │   │   ├── assessment.py                # AssessmentMixin: 7 engine mocks + live discover
 │   │   ├── project.py, branching.py, migration.py, cicd.py, governance.py
 │   ├── performance/                     # 14 tools across 4 mixins
@@ -417,3 +460,88 @@ Each engine maps to its cloud provider, and the region selector in the Assessmen
 11. **Static pricing registry over live APIs** - Rates sourced from official pricing pages, stored in `config/pricing.py` with version tracking and disclaimers. Avoids runtime API dependencies and rate-limit issues while remaining auditable and easy to update.
 12. **Engine-specific mock discovery** - Each of the 7 source engines has a dedicated mock method producing realistic extension profiles, edge cases, and workload characteristics unique to that platform
 13. **Region-aware cost estimation** - Pricing varies by cloud region; the UI dynamically adjusts available regions based on the selected source engine's cloud provider
+
+---
+
+## Development
+
+### Running Tests
+
+```bash
+# Backend unit tests
+uv run pytest
+
+# Frontend tests
+cd app/frontend
+bun run test
+```
+
+### Linting
+
+```bash
+# Python (ruff)
+uv run ruff check .
+uv run ruff format --check .
+
+# TypeScript (via Vite build)
+cd app/frontend
+bun run build
+```
+
+### Frontend Development
+
+```bash
+cd app/frontend
+bun install
+bun run dev          # Vite dev server with HMR
+```
+
+### Adding a New Source Engine
+
+1. Add the engine value to `SourceEngine` enum in `config/migration_profiles.py`
+2. Add a `_mock_discover_<engine>()` method in `agents/provisioning/assessment.py`
+3. Update `utils/blueprint_generator.py` - add entries to `_ENGINE_LABELS`, `_AUTH_MIGRATION_NOTES`, `_POOLING_NOTES`, `_DECOMMISSION_STEPS`, `_NETWORK_PREREQS`
+4. Add any engine-specific extension workarounds to `utils/readiness_scorer.py`
+5. Add pricing data to `config/pricing.py` under `SOURCE_ENGINES` and update `ENGINE_CLOUD_MAP`
+6. Update the `ENGINE_LABELS` map in `app/frontend/src/pages/Assessment.tsx`
+
+### Updating Pricing Data
+
+1. Edit `config/pricing.py` - update rates under `SOURCE_ENGINES` and/or `LAKEBASE_PRICING`
+2. Update `last_verified` date for each modified engine
+3. Bump `PRICING_VERSION` to the current month
+4. No backend or frontend code changes needed - the UI reads everything from the registry
+
+---
+
+## Changelog
+
+### v2.1 (2026-03-11)
+
+- Added AlloyDB PostgreSQL and Supabase PostgreSQL as source engines (5 -> 7 total)
+- Added Extension Compatibility Matrix widget (appears after discovery step)
+- Added Migration Timeline Gantt chart widget (appears after blueprint step)
+- Added Cost Estimation widget with per-region pricing, formula tooltips, and disclaimer
+- Introduced `config/pricing.py` static pricing registry with rates sourced from official cloud pricing pages
+- Added dynamic region selector that updates based on selected source engine
+- Added 5 new backend API endpoints: timeline, extension-matrix, cost-estimate, regions, history
+- Updated README.md and PRD_V2_ARCHITECTURE.md to v2.1
+
+### v2.0 (2026-02-21)
+
+- Refactored 3 monolithic agents into mixin-based sub-packages (7 mixins for Provisioning, 4 for Performance, 5 for Health)
+- Fixed pg_stat_statements scale-to-zero assumption (persistent since PG15)
+- Added PG17 extended columns (WAL, JIT) to pg_stat_statements persistence
+- Added pg_stat_io, pg_stat_wal, pg_stat_checkpointer, pg_stat_statements_info collection
+- Replaced information_schema with native pg_catalog queries
+- Implemented real duplicate index and missing FK index detection via pg_catalog
+- Centralized all SQL into `sql/queries.py` (21 named constants)
+- Added migration assessment pipeline (4-step wizard: discover, profile, readiness, blueprint)
+- Added 5 source engines: Aurora, RDS, Cloud SQL, Azure, Self-Managed PostgreSQL
+
+### v1.0 (2026-01-15)
+
+- Initial release: 3 agents, 47 tools, 7 scheduled Databricks Jobs
+- Full-stack monitoring app (FastAPI + React + MUI)
+- 8 AI/BI dashboard query sets
+- GitHub Actions CI/CD integration for branch lifecycle
