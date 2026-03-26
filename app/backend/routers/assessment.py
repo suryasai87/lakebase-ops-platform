@@ -259,7 +259,7 @@ def assessment_timeline(profile_id: str):
 
 @router.get("/extension-matrix/{profile_id}", operation_id="assessment_extension_matrix")
 def assessment_extension_matrix(profile_id: str):
-    """Return extension compatibility matrix for a discovered database."""
+    """Return extension/feature compatibility matrix for a discovered database."""
     cached = _profiles.get(profile_id)
     if not cached:
         raise HTTPException(status_code=404, detail="Profile not found or expired")
@@ -269,24 +269,40 @@ def assessment_extension_matrix(profile_id: str):
         raise HTTPException(status_code=404, detail="No database profile found")
 
     db = profile_obj.databases[0]
-    from utils.readiness_scorer import LAKEBASE_SUPPORTED_EXTENSIONS, EXTENSION_WORKAROUNDS
+    engine = profile_obj.source_engine.value
+    from config.migration_profiles import ENGINE_KIND
+    is_nosql = ENGINE_KIND.get(engine) == "nosql"
 
     matrix = []
-    for ext in db.extensions:
-        name = ext.name.lower()
-        supported = name in LAKEBASE_SUPPORTED_EXTENSIONS
-        workaround = EXTENSION_WORKAROUNDS.get(name, "")
-        status = "supported" if supported else ("workaround" if workaround else "unsupported")
-        matrix.append({
-            "name": ext.name,
-            "version": ext.version,
-            "status": status,
-            "workaround": workaround,
-        })
+
+    if is_nosql:
+        from utils.readiness_scorer import DYNAMODB_FEATURE_SUPPORT, DYNAMODB_FEATURE_WORKAROUNDS
+        for feature, status in DYNAMODB_FEATURE_SUPPORT.items():
+            workaround = DYNAMODB_FEATURE_WORKAROUNDS.get(feature, "")
+            matrix.append({
+                "name": feature,
+                "version": "",
+                "status": status,
+                "workaround": workaround,
+            })
+    else:
+        from utils.readiness_scorer import LAKEBASE_SUPPORTED_EXTENSIONS, EXTENSION_WORKAROUNDS
+        for ext in db.extensions:
+            name = ext.name.lower()
+            supported = name in LAKEBASE_SUPPORTED_EXTENSIONS
+            workaround = EXTENSION_WORKAROUNDS.get(name, "")
+            status = "supported" if supported else ("workaround" if workaround else "unsupported")
+            matrix.append({
+                "name": ext.name,
+                "version": ext.version,
+                "status": status,
+                "workaround": workaround,
+            })
 
     return {
         "profile_id": profile_id,
         "database": db.name,
+        "matrix_type": "feature" if is_nosql else "extension",
         "extensions": sorted(matrix, key=lambda e: (0 if e["status"] == "supported" else 1 if e["status"] == "workaround" else 2, e["name"])),
         "summary": {
             "supported": sum(1 for e in matrix if e["status"] == "supported"),

@@ -43,7 +43,10 @@ const ENGINE_LABELS: Record<string, string> = {
   "self-managed-postgresql": "Self-Managed PG",
   "alloydb-postgresql": "AlloyDB PG",
   "supabase-postgresql": "Supabase PG",
+  "dynamodb": "DynamoDB",
 };
+
+const NOSQL_ENGINES = new Set(["dynamodb"]);
 
 function severityColor(severity: string): "error" | "warning" | "info" | "success" {
   switch (severity) {
@@ -216,7 +219,7 @@ export default function Assessment() {
             Migration Assessment
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Evaluate external PostgreSQL databases for migration to Lakebase
+            Evaluate external databases for migration to Lakebase
           </Typography>
         </Box>
         <FormControlLabel
@@ -284,6 +287,7 @@ export default function Assessment() {
                 <option value="self-managed-postgresql">Self-Managed PostgreSQL</option>
                 <option value="alloydb-postgresql">AlloyDB PostgreSQL</option>
                 <option value="supabase-postgresql">Supabase PostgreSQL</option>
+                <option value="dynamodb">Amazon DynamoDB</option>
               </TextField>
               <TextField
                 fullWidth
@@ -379,7 +383,7 @@ export default function Assessment() {
                 <Grid container spacing={2}>
                   <Grid item xs={6} sm={3}>
                     <Typography variant="body2" color="text.secondary">
-                      Database
+                      {NOSQL_ENGINES.has(form.source_engine) ? "Account/Region" : "Database"}
                     </Typography>
                     <Typography variant="h6">{discover.database}</Typography>
                   </Grid>
@@ -397,59 +401,103 @@ export default function Assessment() {
                   </Grid>
                   <Grid item xs={6} sm={3}>
                     <Typography variant="body2" color="text.secondary">
-                      PG Version
+                      {NOSQL_ENGINES.has(form.source_engine) ? "Engine" : "PG Version"}
                     </Typography>
                     <Typography variant="h6">{discover.source_version}</Typography>
                   </Grid>
                 </Grid>
-                <Box sx={{ mt: 2 }}>
-                  <Typography variant="body2" color="text.secondary" gutterBottom>
-                    Extensions
-                  </Typography>
-                  <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                    {(discover.extensions || []).map((ext: string) => (
-                      <Chip key={ext} label={ext} size="small" variant="outlined" />
-                    ))}
-                  </Box>
-                </Box>
-                <Grid container spacing={2} sx={{ mt: 1 }}>
-                  <Grid item xs={4} sm={2}>
-                    <Typography variant="caption" color="text.secondary">
-                      Functions
-                    </Typography>
-                    <Typography>{discover.function_count}</Typography>
+
+                {NOSQL_ENGINES.has(form.source_engine) ? (
+                  <Grid container spacing={2} sx={{ mt: 1 }}>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        GSIs
+                      </Typography>
+                      <Typography>{discover.gsi_count ?? 0}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        LSIs
+                      </Typography>
+                      <Typography>{discover.lsi_count ?? 0}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Billing
+                      </Typography>
+                      <Typography>{discover.billing_mode ?? "N/A"}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Streams
+                      </Typography>
+                      <Typography>{discover.streams_enabled ? "Yes" : "No"}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        TTL
+                      </Typography>
+                      <Typography>{discover.ttl_enabled ? "Yes" : "No"}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        PITR
+                      </Typography>
+                      <Typography>{discover.pitr_enabled ? "Yes" : "No"}</Typography>
+                    </Grid>
                   </Grid>
-                  <Grid item xs={4} sm={2}>
-                    <Typography variant="caption" color="text.secondary">
-                      Triggers
-                    </Typography>
-                    <Typography>{discover.trigger_count}</Typography>
-                  </Grid>
-                  <Grid item xs={4} sm={2}>
-                    <Typography variant="caption" color="text.secondary">
-                      Sequences
-                    </Typography>
-                    <Typography>{discover.sequence_count}</Typography>
-                  </Grid>
-                  <Grid item xs={4} sm={2}>
-                    <Typography variant="caption" color="text.secondary">
-                      Mat. Views
-                    </Typography>
-                    <Typography>{discover.materialized_view_count}</Typography>
-                  </Grid>
-                  <Grid item xs={4} sm={2}>
-                    <Typography variant="caption" color="text.secondary">
-                      Schemas
-                    </Typography>
-                    <Typography>{discover.schema_count}</Typography>
-                  </Grid>
-                  <Grid item xs={4} sm={2}>
-                    <Typography variant="caption" color="text.secondary">
-                      FKs
-                    </Typography>
-                    <Typography>{discover.foreign_key_count}</Typography>
-                  </Grid>
-                </Grid>
+                ) : (
+                  <>
+                    <Box sx={{ mt: 2 }}>
+                      <Typography variant="body2" color="text.secondary" gutterBottom>
+                        Extensions
+                      </Typography>
+                      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                        {(discover.extensions || []).map((ext: string) => (
+                          <Chip key={ext} label={ext} size="small" variant="outlined" />
+                        ))}
+                      </Box>
+                    </Box>
+                    <Grid container spacing={2} sx={{ mt: 1 }}>
+                      <Grid item xs={4} sm={2}>
+                        <Typography variant="caption" color="text.secondary">
+                          Functions
+                        </Typography>
+                        <Typography>{discover.function_count}</Typography>
+                      </Grid>
+                      <Grid item xs={4} sm={2}>
+                        <Typography variant="caption" color="text.secondary">
+                          Triggers
+                        </Typography>
+                        <Typography>{discover.trigger_count}</Typography>
+                      </Grid>
+                      <Grid item xs={4} sm={2}>
+                        <Typography variant="caption" color="text.secondary">
+                          Sequences
+                        </Typography>
+                        <Typography>{discover.sequence_count}</Typography>
+                      </Grid>
+                      <Grid item xs={4} sm={2}>
+                        <Typography variant="caption" color="text.secondary">
+                          Mat. Views
+                        </Typography>
+                        <Typography>{discover.materialized_view_count}</Typography>
+                      </Grid>
+                      <Grid item xs={4} sm={2}>
+                        <Typography variant="caption" color="text.secondary">
+                          Schemas
+                        </Typography>
+                        <Typography>{discover.schema_count}</Typography>
+                      </Grid>
+                      <Grid item xs={4} sm={2}>
+                        <Typography variant="caption" color="text.secondary">
+                          FKs
+                        </Typography>
+                        <Typography>{discover.foreign_key_count}</Typography>
+                      </Grid>
+                    </Grid>
+                  </>
+                )}
               </CardContent>
             </Card>
           )}
@@ -724,6 +772,7 @@ export default function Assessment() {
                 extensions={extMatrix.extensions}
                 summary={extMatrix.summary}
                 database={extMatrix.database}
+                matrixType={extMatrix.matrix_type || "extension"}
               />
             </Box>
           )}

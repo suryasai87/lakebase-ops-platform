@@ -33,6 +33,7 @@ interface ExtensionMatrixProps {
   extensions: Extension[];
   summary: Summary;
   database: string;
+  matrixType?: "extension" | "feature";
 }
 
 function statusIcon(status: string) {
@@ -52,15 +53,16 @@ function statusColor(status: string): "success" | "warning" | "error" {
   return "error";
 }
 
-export default function ExtensionMatrix({ extensions, summary, database }: ExtensionMatrixProps) {
+export default function ExtensionMatrix({ extensions, summary, database, matrixType = "extension" }: ExtensionMatrixProps) {
   const total = summary.supported + summary.workaround + summary.unsupported;
+  const title = matrixType === "feature" ? "Feature Compatibility" : "Extension Compatibility";
 
   return (
     <Card>
       <CardContent>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
           <Typography variant="subtitle1" fontWeight={600}>
-            Extension Compatibility
+            {title}
           </Typography>
           <Chip label={`${total} total`} size="small" variant="outlined" />
         </Box>
@@ -97,7 +99,7 @@ export default function ExtensionMatrix({ extensions, summary, database }: Exten
                   Status
                 </TableCell>
                 <TableCell sx={{ bgcolor: "#0D1117", fontWeight: 600, borderBottom: "1px solid #30363D" }}>
-                  Extension
+                  {matrixType === "feature" ? "Feature" : "Extension"}
                 </TableCell>
                 <TableCell sx={{ bgcolor: "#0D1117", fontWeight: 600, borderBottom: "1px solid #30363D" }}>
                   Version

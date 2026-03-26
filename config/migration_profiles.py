@@ -22,6 +22,20 @@ class SourceEngine(Enum):
     ALLOYDB_POSTGRESQL = "alloydb-postgresql"
     SUPABASE_POSTGRESQL = "supabase-postgresql"
     AURORA_MYSQL = "aurora-mysql"
+    DYNAMODB = "dynamodb"
+
+
+ENGINE_KIND: dict[str, str] = {
+    "dynamodb": "nosql",
+    "aurora-postgresql": "pg",
+    "rds-postgresql": "pg",
+    "cloud-sql-postgresql": "pg",
+    "azure-postgresql": "pg",
+    "self-managed-postgresql": "pg",
+    "alloydb-postgresql": "pg",
+    "supabase-postgresql": "pg",
+    "aurora-mysql": "pg",
+}
 
 
 class ReadinessCategory(Enum):
@@ -134,6 +148,16 @@ class DatabaseProfile:
     exclusion_constraint_count: int = 0
     custom_aggregate_count: int = 0
     non_default_collation_count: int = 0
+    # DynamoDB-specific (None for PostgreSQL engines)
+    billing_mode: Optional[str] = None
+    gsi_count: Optional[int] = None
+    lsi_count: Optional[int] = None
+    streams_enabled: Optional[bool] = None
+    ttl_enabled: Optional[bool] = None
+    pitr_enabled: Optional[bool] = None
+    global_table_regions: Optional[list[str]] = None
+    item_size_avg_bytes: Optional[int] = None
+    dynamo_table_details: Optional[list[dict]] = None
 
 
 # ── Assessment Results ─────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 # LakebaseOps: Autonomous Lakebase Database Operations Platform
 
-> **v2.1** | 3 Agents | 51 Tools | 7 Source Engines | PostgreSQL 17
+> **v2.2** | 3 Agents | 51 Tools | 8 Source Engines | PostgreSQL 17
 
 **Automated DBA Operations, Monitoring & OLTP-to-OLAP Lifecycle Management**
 
@@ -50,7 +50,7 @@ The platform consists of **3 collaborative AI agents** (51 tools total) coordina
     | CICDMixin           |  | OptimizationMix|  | ConnectionMixin|
     | GovernanceMixin     |  |                |  | OperationsMixin|
     | AssessmentMixin     |  |                |  |                |
-    | (7 engines)         |  |                |  |                |
+    | (8 engines)         |  |                |  |                |
     +----------+----------+  +-------+--------+  +-------+--------+
                |                     |                    |
                v                     v                    v
@@ -64,18 +64,18 @@ The platform consists of **3 collaborative AI agents** (51 tools total) coordina
 
 ### Migration Assessment Pipeline
 
-The `AssessmentMixin` provides a 4-step pipeline for evaluating external PostgreSQL databases for migration to Lakebase:
+The `AssessmentMixin` provides a 4-step pipeline for evaluating external databases for migration to Lakebase. Supports both PostgreSQL engines and NoSQL sources (DynamoDB):
 
 ```
-  Source DB (7 engines supported)
+  Source DB (8 engines supported)
        |
        v
-  1. Discover - schema, extensions, functions, triggers, edge cases
+  1. Discover - schema, extensions/features, functions, triggers, edge cases
        |                                      +---------------------------+
-       +------------------------------------->| Extension Compatibility   |
-       |                                      | Matrix (per-extension     |
-       v                                      | supported/workaround/    |
-  2. Profile  - QPS, TPS, connections,        | unsupported status)       |
+       +------------------------------------->| Extension / Feature       |
+       |                                      | Compatibility Matrix      |
+       v                                      | (per-item supported/      |
+  2. Profile  - QPS, TPS, connections,        | workaround/unsupported)   |
        |        read/write ratio              +---------------------------+
        v
   3. Readiness - score against Lakebase constraints (6 dimensions)
@@ -98,6 +98,7 @@ The `AssessmentMixin` provides a 4-step pipeline for evaluating external Postgre
 | AlloyDB for PostgreSQL | GCP | Columnar engine, `google_ml_integration`, high-perf |
 | Supabase PostgreSQL | Multi | `pg_graphql`, `pgjwt`, platform-managed auth/storage/realtime schemas |
 | Self-Managed PostgreSQL | Any | Full extension control, `timescaledb`, `citus`, `pglogical` |
+| Amazon DynamoDB | AWS | NoSQL cross-engine migration, GSI/LSI, Streams, on-demand/provisioned billing |
 
 ### Agent 1: Provisioning & DevOps (21 tools)
 
@@ -122,7 +123,7 @@ Automates "Day 0" and "Day 1" - the 59 setup tasks from the Enterprise Lakebase 
 | `setup_unity_catalog_integration` | governance | UC governance alignment | Tasks 50-54 |
 | `setup_ai_agent_branching` | governance | AI agent branching config | Tasks 55-57 |
 | `provision_with_governance` | governance | Full project setup with all governance | Combined |
-| `connect_and_discover` | assessment | Discover source DB schema, extensions, features (7 engines) | Migration |
+| `connect_and_discover` | assessment | Discover source DB schema, extensions, features (8 engines) | Migration |
 | `profile_workload` | assessment | Analyze QPS, TPS, connections, read/write ratio | Migration |
 | `assess_readiness` | assessment | Score against Lakebase constraints (6 dimensions) | Migration |
 | `generate_migration_blueprint` | assessment | 4-phase migration plan with effort estimates | Migration |
@@ -261,7 +262,7 @@ After running the 4-step assessment pipeline, the Assessment page displays three
 
 ---
 
-## Project Structure (V2.1 - Modular Mixin Architecture)
+## Project Structure (V2.2 - Modular Mixin Architecture)
 
 ```
 lakebase-ops-platform/
@@ -316,7 +317,7 @@ lakebase-ops-platform/
 |
 ├── config/
 │   ├── settings.py                      # All configs (env-var driven)
-│   ├── migration_profiles.py            # Assessment dataclasses + SourceEngine enum (7 engines)
+│   ├── migration_profiles.py            # Assessment dataclasses + SourceEngine enum (8 engines)
 │   └── pricing.py                       # Per-engine, per-region pricing registry with formulas
 |
 ├── utils/
@@ -458,7 +459,7 @@ Each engine maps to its cloud provider, and the region selector in the Assessmen
 9. **Event-driven agent coordination** - Provisioning -> Performance -> Health via EventType subscriptions
 10. **Risk-stratified remediation** - Low-risk auto-executes, medium/high requires approval
 11. **Static pricing registry over live APIs** - Rates sourced from official pricing pages, stored in `config/pricing.py` with version tracking and disclaimers. Avoids runtime API dependencies and rate-limit issues while remaining auditable and easy to update.
-12. **Engine-specific mock discovery** - Each of the 7 source engines has a dedicated mock method producing realistic extension profiles, edge cases, and workload characteristics unique to that platform
+12. **Engine-specific mock discovery** - Each of the 8 source engines has a dedicated mock method producing realistic extension/feature profiles, edge cases, and workload characteristics unique to that platform
 13. **Region-aware cost estimation** - Pricing varies by cloud region; the UI dynamically adjusts available regions based on the selected source engine's cloud provider
 
 ---
@@ -515,6 +516,18 @@ bun run dev          # Vite dev server with HMR
 ---
 
 ## Changelog
+
+### v2.2 (2026-03-11)
+
+- Added Amazon DynamoDB as source engine (7 -> 8 total) - first NoSQL cross-engine migration path
+- Introduced `ENGINE_KIND` discriminator to route assessment logic for PostgreSQL (`pg`) vs NoSQL (`nosql`) engines
+- Added `_mock_discover_dynamodb()` and `_mock_workload_dynamodb()` with GSI/LSI, billing mode, Streams, TTL, PITR simulation
+- Added DynamoDB-specific readiness scoring: feature compatibility, single-table design penalty, Streams/TTL/DAX/Global Tables dimensions
+- Added DynamoDB cross-engine blueprint phases: relational modeling, S3 export, ETL, application rewrite (SDK to SQL)
+- Added DynamoDB on-demand pricing (WRU/RRU) to `config/pricing.py`
+- Extension matrix endpoint now returns feature compatibility matrix for NoSQL sources
+- Frontend conditionally renders DynamoDB-specific discovery fields and feature matrix title
+- Added 4 new DynamoDB test cases to `test_assessment.py`
 
 ### v2.1 (2026-03-11)
 

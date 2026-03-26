@@ -17,6 +17,7 @@ Scoring dimensions (weighted):
 from __future__ import annotations
 
 from config.migration_profiles import (
+    ENGINE_KIND,
     AssessmentResult,
     Blocker,
     BlockerSeverity,
@@ -84,15 +85,40 @@ EXTENSION_WORKAROUNDS = {
     "supautils": "Supabase utility functions not available; replicate needed logic in application code",
 }
 
+DYNAMODB_FEATURE_SUPPORT: dict[str, str] = {
+    "Transactions (TransactWriteItems)": "supported",
+    "Conditional writes": "supported",
+    "Batch operations (BatchWriteItem)": "supported",
+    "TTL (time-to-live)": "supported",
+    "Encryption at rest": "supported",
+    "DynamoDB Streams": "workaround",
+    "Global Tables (multi-region)": "workaround",
+    "DAX (DynamoDB Accelerator)": "unsupported",
+    "PartiQL over DynamoDB": "workaround",
+    "On-demand capacity scaling": "workaround",
+    "Single-table design patterns": "workaround",
+}
+
+DYNAMODB_FEATURE_WORKAROUNDS: dict[str, str] = {
+    "DynamoDB Streams": "Use Lakeflow Connect CDC, application-level triggers, or pg_notify for change capture",
+    "Global Tables (multi-region)": "Use single-region Lakebase primary with read replicas or DR failover",
+    "DAX (DynamoDB Accelerator)": "Not available as managed service; use application-level caching (Redis, Memcached) or materialized views",
+    "PartiQL over DynamoDB": "Rewrite PartiQL queries to standard PostgreSQL SQL",
+    "On-demand capacity scaling": "Lakebase uses CU-based autoscaling (0.5-32 CU); capacity planning required",
+    "Single-table design patterns": "Decompose into normalized relational tables; use JSONB for flexible attributes",
+}
+
 
 def compute_readiness_score(
     db_profile: DatabaseProfile,
     workload: WorkloadProfile | None = None,
+    source_engine: str = "",
 ) -> AssessmentResult:
     """
     Compute a Lakebase readiness score for a profiled database.
     Returns an AssessmentResult with overall score, category, and blockers.
     """
+    is_nosql = ENGINE_KIND.get(source_engine) == "nosql"
     dimensions = []
     all_blockers = []
     all_warnings = []
@@ -114,7 +140,10 @@ def compute_readiness_score(
 
     # ── Dimension 2: Extensions (weight 0.20) ───────────────────────────
 
-    ext_score, ext_blockers, ext_warnings, sup, unsup = _score_extensions(db_profile)
+    if is_nosql:
+        ext_score, ext_blockers, ext_warnings, sup, unsup = _score_dynamodb_features(db_profile)
+    else:
+        ext_score, ext_blockers, ext_warnings, sup, unsup = _score_extensions(db_profile)
     dimensions.append(DimensionScore(
         dimension="extensions",
         score=ext_score,
@@ -143,7 +172,10 @@ def compute_readiness_score(
 
     # ── Dimension 4: Schema Complexity (weight 0.15) ────────────────────
 
-    complexity_score, complexity_blockers, complexity_warnings, complexity_details = _score_complexity(db_profile)
+    if is_nosql:
+        complexity_score, complexity_blockers, complexity_warnings, complexity_details = _score_nosql_complexity(db_profile)
+    else:
+        complexity_score, complexity_blockers, complexity_warnings, complexity_details = _score_complexity(db_profile)
     dimensions.append(DimensionScore(
         dimension="schema_complexity",
         score=complexity_score,
@@ -157,7 +189,10 @@ def compute_readiness_score(
 
     # ── Dimension 5: Replication & HA (weight 0.15) ─────────────────────
 
-    repl_score, repl_blockers, repl_details = _score_replication(db_profile)
+    if is_nosql:
+        repl_score, repl_blockers, repl_details = _score_nosql_replication(db_profile)
+    else:
+        repl_score, repl_blockers, repl_details = _score_replication(db_profile)
     dimensions.append(DimensionScore(
         dimension="replication_ha",
         score=repl_score,
@@ -170,7 +205,10 @@ def compute_readiness_score(
 
     # ── Dimension 6: Operational Readiness (weight 0.15) ────────────────
 
-    ops_score, ops_warnings, ops_details = _score_operational(db_profile, workload)
+    if is_nosql:
+        ops_score, ops_warnings, ops_details = _score_nosql_operational(db_profile, workload)
+    else:
+        ops_score, ops_warnings, ops_details = _score_operational(db_profile, workload)
     dimensions.append(DimensionScore(
         dimension="operational",
         score=ops_score,
@@ -195,7 +233,10 @@ def compute_readiness_score(
     else:
         category = ReadinessCategory.READY
 
-    effort = _estimate_effort(db_profile, all_blockers, unsupported_exts)
+    if is_nosql:
+        effort = _estimate_effort_nosql(db_profile, all_blockers)
+    else:
+        effort = _estimate_effort(db_profile, all_blockers, unsupported_exts)
     tier, cu_min, cu_max = _recommend_sizing(db_profile, workload)
 
     return AssessmentResult(
@@ -236,6 +277,165 @@ def _score_storage(db: DatabaseProfile) -> tuple[float, list[Blocker], str]:
     ratio = size_gb / LAKEBASE_MAX_STORAGE_PROVISIONED_GB
     score = max(0, 100 * (1 - ratio * 0.5))
     return round(score, 1), blockers, f"{size_gb:.1f} GB - fits both tiers"
+
+
+def _score_dynamodb_features(db: DatabaseProfile) -> tuple[float, list[Blocker], list[str], list[str], list[str]]:
+    """Score DynamoDB feature compatibility with Lakebase."""
+    blockers = []
+    warnings = []
+    supported = []
+    unsupported = []
+    score = 100
+
+    for feature, status in DYNAMODB_FEATURE_SUPPORT.items():
+        if status == "supported":
+            supported.append(feature)
+        elif status == "workaround":
+            wk = DYNAMODB_FEATURE_WORKAROUNDS.get(feature, "Evaluate manually")
+            warnings.append(f"'{feature}' requires workaround: {wk}")
+            unsupported.append(feature)
+            blockers.append(Blocker(
+                category="feature_compatibility",
+                severity=BlockerSeverity.MEDIUM,
+                description=f"DynamoDB feature '{feature}' not natively available in Lakebase",
+                workaround=wk,
+                effort_days=2,
+            ))
+            score -= 8
+        else:
+            unsupported.append(feature)
+            blockers.append(Blocker(
+                category="feature_compatibility",
+                severity=BlockerSeverity.HIGH,
+                description=f"DynamoDB feature '{feature}' not supported in Lakebase",
+                workaround=DYNAMODB_FEATURE_WORKAROUNDS.get(feature, "Evaluate manually"),
+                effort_days=3,
+            ))
+            score -= 15
+
+    if db.streams_enabled:
+        score -= 5
+    if db.global_table_regions and len(db.global_table_regions) > 1:
+        score -= 15
+        blockers.append(Blocker(
+            category="feature_compatibility",
+            severity=BlockerSeverity.HIGH,
+            description=f"Global Tables active in {len(db.global_table_regions)} regions - multi-region not supported in Lakebase",
+            workaround="Consolidate to single-region Lakebase with DR strategy",
+            effort_days=5,
+        ))
+
+    return max(0, round(score, 1)), blockers, warnings, supported, unsupported
+
+
+def _score_nosql_complexity(db: DatabaseProfile) -> tuple[float, list[Blocker], list[str], str]:
+    """Score DynamoDB schema complexity for relational conversion."""
+    blockers = []
+    warnings = []
+    score = 100
+
+    gsi_count = db.gsi_count or 0
+    lsi_count = db.lsi_count or 0
+
+    if gsi_count > 10:
+        score -= 15
+        warnings.append(f"{gsi_count} GSIs require careful index design in PostgreSQL")
+    elif gsi_count > 5:
+        score -= 5
+
+    if lsi_count > 3:
+        score -= 5
+
+    if db.item_size_avg_bytes and db.item_size_avg_bytes > 100_000:
+        score -= 10
+        warnings.append(f"Average item size {db.item_size_avg_bytes:,} bytes - large items may need JSONB + TOAST tuning")
+
+    # Penalty for NoSQL-to-relational schema redesign overhead (always applies for cross-engine migration)
+    score -= 15
+
+    details_parts = []
+    if gsi_count:
+        details_parts.append(f"{gsi_count} GSIs")
+    if lsi_count:
+        details_parts.append(f"{lsi_count} LSIs")
+    if db.billing_mode:
+        details_parts.append(f"billing: {db.billing_mode}")
+    if db.item_size_avg_bytes:
+        details_parts.append(f"avg item: {db.item_size_avg_bytes:,} bytes")
+
+    details = ", ".join(details_parts) if details_parts else "Standard NoSQL schema"
+    return max(0, round(score, 1)), blockers, warnings, details
+
+
+def _score_nosql_replication(db: DatabaseProfile) -> tuple[float, list[Blocker], str]:
+    """Score DynamoDB Streams and Global Tables for migration impact."""
+    blockers = []
+    score = 100
+
+    if db.streams_enabled:
+        blockers.append(Blocker(
+            category="replication",
+            severity=BlockerSeverity.MEDIUM,
+            description="DynamoDB Streams enabled - downstream consumers need migration to Lakebase CDC or application triggers",
+            workaround="Use Lakeflow Connect or application-level event publishing",
+            effort_days=3,
+        ))
+        score -= 15
+
+    if not db.pitr_enabled:
+        blockers.append(Blocker(
+            category="replication",
+            severity=BlockerSeverity.MEDIUM,
+            description="PITR not enabled - required for zero-impact DynamoDB Export to S3",
+            workaround="Enable PITR before starting migration; required for Export to S3",
+            effort_days=0.5,
+        ))
+        score -= 10
+
+    regions = db.global_table_regions or []
+    if len(regions) > 1:
+        score -= 20
+
+    details = f"Streams: {db.streams_enabled}, PITR: {db.pitr_enabled}, Global regions: {len(regions)}"
+    return max(0, round(score, 1)), blockers, details
+
+
+def _score_nosql_operational(db: DatabaseProfile, workload: WorkloadProfile | None) -> tuple[float, list[str], str]:
+    """Score DynamoDB operational dependencies for migration."""
+    warnings = []
+    score = 100
+
+    if db.billing_mode == "provisioned":
+        warnings.append("Provisioned capacity mode requires capacity planning for Lakebase CU sizing")
+        score -= 5
+
+    if db.ttl_enabled:
+        warnings.append("DynamoDB TTL must be replaced with scheduled DELETE jobs or partition drops on Lakebase")
+        score -= 5
+
+    # Baseline penalty for SDK-to-SQL rewrite and operational tooling changes
+    score -= 10
+
+    if workload and workload.avg_tps > LAKEBASE_MAX_SUSTAINED_TPS:
+        warnings.append(f"Write throughput ({workload.avg_tps:,.0f} TPS) may exceed Lakebase sustained capacity")
+        score -= 15
+
+    details = f"{len(warnings)} operational considerations" if warnings else "No operational concerns"
+    return max(0, round(score, 1)), warnings, details
+
+
+def _estimate_effort_nosql(db: DatabaseProfile, blockers: list[Blocker]) -> float:
+    """Estimate migration effort for NoSQL-to-relational migration."""
+    base_days = 15.0
+    base_days += sum(b.effort_days for b in blockers)
+    if db.table_count > 20:
+        base_days += 5
+    if db.size_gb > 500:
+        base_days += 10
+    gsi_count = db.gsi_count or 0
+    if gsi_count > 5:
+        base_days += gsi_count * 0.5
+    return round(base_days, 1)
 
 
 def _score_extensions(db: DatabaseProfile) -> tuple[float, list[Blocker], list[str], list[str], list[str]]:

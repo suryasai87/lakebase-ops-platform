@@ -173,6 +173,24 @@ SOURCE_ENGINES: dict[str, dict] = {
             "io": "N/A (included in gp3 baseline)",
         },
     },
+    "dynamodb": {
+        "label": "Amazon DynamoDB",
+        "cloud": "aws",
+        "instance_ref": "On-Demand (PAY_PER_REQUEST)",
+        "source_url": "https://aws.amazon.com/dynamodb/pricing/on-demand/",
+        "last_verified": "2026-03",
+        "regions": {
+            "us-east-1": {"compute_per_hour": 0.52, "storage_per_gb_month": 0.25, "io_per_million": 0.625},
+            "us-west-2": {"compute_per_hour": 0.52, "storage_per_gb_month": 0.25, "io_per_million": 0.625},
+            "eu-west-1": {"compute_per_hour": 0.57, "storage_per_gb_month": 0.28, "io_per_million": 0.687},
+            "default": {"compute_per_hour": 0.54, "storage_per_gb_month": 0.25, "io_per_million": 0.625},
+        },
+        "formulas": {
+            "compute": "estimated_RCU/s x 2,592,000 sec/month / 1,000,000 x $0.25/million RRU (normalized to hourly equiv)",
+            "storage": "storage_gb x $0.25/GB/month",
+            "io": "estimated_WCU/s x 2,592,000 sec/month / 1,000,000 x $1.25/million WRU",
+        },
+    },
 }
 
 # ── Lakebase Pricing ───────────────────────────────────────────────────────
@@ -251,6 +269,7 @@ ENGINE_CLOUD_MAP: dict[str, str] = {
     "alloydb-postgresql": "gcp",
     "supabase-postgresql": "multi",
     "self-managed-postgresql": "self-managed",
+    "dynamodb": "aws",
 }
 
 # Lakebase region key prefix by cloud

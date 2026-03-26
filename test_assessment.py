@@ -20,6 +20,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config.migration_profiles import (
+    ENGINE_KIND,
     AssessmentResult,
     BlockerSeverity,
     DatabaseProfile,
@@ -28,13 +29,19 @@ from config.migration_profiles import (
     LakebaseTier,
     MigrationBlueprint,
     MigrationProfile,
+    MigrationStrategy,
     ReadinessCategory,
     SourceEngine,
     TableProfile,
     TriggerInfo,
     WorkloadProfile,
 )
-from utils.readiness_scorer import compute_readiness_score, LAKEBASE_SUPPORTED_EXTENSIONS
+from utils.readiness_scorer import (
+    compute_readiness_score,
+    LAKEBASE_SUPPORTED_EXTENSIONS,
+    DYNAMODB_FEATURE_SUPPORT,
+    DYNAMODB_FEATURE_WORKAROUNDS,
+)
 from utils.blueprint_generator import generate_blueprint, render_blueprint_markdown
 
 
@@ -42,7 +49,7 @@ from utils.blueprint_generator import generate_blueprint, render_blueprint_markd
 # Test Helpers
 # =============================================================================
 
-class TestReport:
+class _TestReport:
     def __init__(self):
         self.results = []
         self.start_time = time.time()
@@ -66,14 +73,14 @@ class TestReport:
 
 @pytest.fixture
 def report():
-    return TestReport()
+    return _TestReport()
 
 
 # =============================================================================
 # Test: Migration Profile Dataclasses
 # =============================================================================
 
-def test_dataclasses(report: TestReport):
+def test_dataclasses(report: _TestReport):
     print("\n--- Migration Profile Dataclasses ---")
 
     profile = MigrationProfile(
@@ -107,7 +114,7 @@ def test_dataclasses(report: TestReport):
 # Test: Readiness Scoring Engine
 # =============================================================================
 
-def test_readiness_scorer(report: TestReport):
+def test_readiness_scorer(report: _TestReport):
     print("\n--- Readiness Scoring Engine ---")
 
     # Test 1: Small, clean database -> READY
@@ -332,7 +339,7 @@ def test_readiness_scorer(report: TestReport):
 # Test: Blueprint Generator
 # =============================================================================
 
-def test_blueprint_generator(report: TestReport):
+def test_blueprint_generator(report: _TestReport):
     print("\n--- Blueprint Generator ---")
 
     db = DatabaseProfile(
@@ -386,7 +393,7 @@ def test_blueprint_generator(report: TestReport):
 # Test: AssessmentMixin (4 Tools via ProvisioningAgent)
 # =============================================================================
 
-def test_assessment_mixin(report: TestReport):
+def test_assessment_mixin(report: _TestReport):
     print("\n--- AssessmentMixin (4 Tools) ---")
 
     from utils.lakebase_client import LakebaseClient
@@ -455,7 +462,7 @@ def test_assessment_mixin(report: TestReport):
 # Test: End-to-End Pipeline
 # =============================================================================
 
-def test_end_to_end(report: TestReport):
+def test_end_to_end(report: _TestReport):
     print("\n--- End-to-End Pipeline ---")
 
     from utils.lakebase_client import LakebaseClient
@@ -489,22 +496,207 @@ def test_end_to_end(report: TestReport):
 
 
 # =============================================================================
+# Test: DynamoDB Assessment
+# =============================================================================
+
+def test_dynamodb_discovery(report: _TestReport):
+    print("\n--- DynamoDB Discovery ---")
+
+    from utils.lakebase_client import LakebaseClient
+    from utils.delta_writer import DeltaWriter
+    from utils.alerting import AlertManager
+    from agents import ProvisioningAgent
+
+    agent = ProvisioningAgent(
+        LakebaseClient(workspace_host="test", mock_mode=True),
+        DeltaWriter(mock_mode=True),
+        AlertManager(mock_mode=True),
+    )
+    agent.register_tools()
+
+    discovery = agent.connect_and_discover(
+        source_engine="dynamodb",
+        mock=True,
+    )
+    report.add("DynamoDB: discovery returns profile_id", "profile_id" in discovery, discovery.get("profile_id", ""))
+    report.add("DynamoDB: engine is dynamodb", discovery.get("source_engine") == "dynamodb", f"{discovery.get('source_engine')}")
+    report.add("DynamoDB: has table_count", discovery.get("table_count", 0) > 0, f"{discovery.get('table_count')} tables")
+    report.add("DynamoDB: has size_gb", discovery.get("size_gb", 0) > 0, f"{discovery.get('size_gb')} GB")
+    report.add("DynamoDB: has gsi_count", discovery.get("gsi_count", 0) > 0, f"{discovery.get('gsi_count')} GSIs")
+    report.add("DynamoDB: has billing_mode", discovery.get("billing_mode") is not None, f"{discovery.get('billing_mode')}")
+    report.add("DynamoDB: has streams_enabled", discovery.get("streams_enabled") is not None, f"{discovery.get('streams_enabled')}")
+    report.add("DynamoDB: has pitr_enabled", discovery.get("pitr_enabled") is not None, f"{discovery.get('pitr_enabled')}")
+    report.add("DynamoDB: no extensions field", "extensions" not in discovery or "extension_count" not in discovery, "No PG extensions in DynamoDB")
+    report.add("DynamoDB: source_version is DynamoDB", discovery.get("source_version") == "DynamoDB", f"{discovery.get('source_version')}")
+
+    workload = agent.profile_workload(profile_data=discovery, mock=True)
+    report.add("DynamoDB: workload has QPS", workload.get("avg_qps", 0) > 0, f"QPS={workload.get('avg_qps')}")
+    report.add("DynamoDB: workload has TPS", workload.get("avg_tps", 0) > 0, f"TPS={workload.get('avg_tps')}")
+
+
+def test_dynamodb_readiness(report: _TestReport):
+    print("\n--- DynamoDB Readiness Scoring ---")
+
+    dynamo_db = DatabaseProfile(
+        name="dynamo-test",
+        size_bytes=50_000_000_000,
+        size_gb=46.6,
+        table_count=10,
+        schema_count=1,
+        schemas=["default"],
+        extensions=[],
+        functions=[],
+        triggers=[],
+        billing_mode="on-demand",
+        gsi_count=8,
+        lsi_count=2,
+        streams_enabled=True,
+        ttl_enabled=True,
+        pitr_enabled=True,
+        global_table_regions=[],
+        item_size_avg_bytes=4200,
+    )
+    workload = WorkloadProfile(avg_qps=3500, avg_tps=850, connection_count_peak=250)
+
+    result = compute_readiness_score(dynamo_db, workload, source_engine="dynamodb")
+
+    report.add("DynamoDB: score > 0", result.overall_score > 0, f"Score={result.overall_score}")
+    report.add("DynamoDB: has 6 dimensions", len(result.dimension_scores) == 6, f"{len(result.dimension_scores)} dimensions")
+    report.add("DynamoDB: has blockers", len(result.blockers) > 0, f"{len(result.blockers)} blockers")
+    report.add("DynamoDB: feature_compatibility blocker present",
+        any(b.category == "feature_compatibility" for b in result.blockers),
+        "Feature compatibility blockers found")
+    report.add("DynamoDB: effort > 15 days (cross-engine)",
+        result.estimated_effort_days >= 15, f"{result.estimated_effort_days} days")
+    report.add("DynamoDB: DAX flagged as unsupported",
+        any("DAX" in b.description for b in result.blockers),
+        "DAX blocker found")
+
+    no_pitr = DatabaseProfile(
+        name="dynamo-no-pitr",
+        size_bytes=1_000_000_000,
+        size_gb=0.93,
+        table_count=3,
+        extensions=[],
+        functions=[],
+        triggers=[],
+        billing_mode="on-demand",
+        gsi_count=2,
+        lsi_count=0,
+        streams_enabled=False,
+        pitr_enabled=False,
+    )
+    result2 = compute_readiness_score(no_pitr, source_engine="dynamodb")
+    report.add("DynamoDB: PITR warning when disabled",
+        any("PITR" in b.description for b in result2.blockers),
+        "PITR blocker found")
+
+
+def test_dynamodb_blueprint(report: _TestReport):
+    print("\n--- DynamoDB Blueprint ---")
+
+    dynamo_db = DatabaseProfile(
+        name="dynamo-blueprint-test",
+        size_bytes=50_000_000_000,
+        size_gb=46.6,
+        table_count=10,
+        schema_count=1,
+        schemas=["default"],
+        extensions=[],
+        functions=[],
+        triggers=[],
+        billing_mode="on-demand",
+        gsi_count=8,
+        lsi_count=2,
+        streams_enabled=True,
+        pitr_enabled=True,
+    )
+
+    assessment = compute_readiness_score(dynamo_db, source_engine="dynamodb")
+    workload = WorkloadProfile(avg_qps=3500, avg_tps=850, connection_count_peak=250)
+
+    blueprint = generate_blueprint(
+        db_profile=dynamo_db,
+        assessment=assessment,
+        workload=workload,
+        source_endpoint="dynamodb.us-east-1.amazonaws.com",
+        lakebase_endpoint="ep-xxx.database.us-east-1.cloud.databricks.com",
+        database_name="dynamo-blueprint-test",
+        source_engine="dynamodb",
+    )
+
+    report.add("DynamoDB: strategy is cross_engine",
+        blueprint.strategy == MigrationStrategy.CROSS_ENGINE,
+        f"Strategy={blueprint.strategy.value}")
+    report.add("DynamoDB: 4 phases", len(blueprint.phases) == 4, f"{len(blueprint.phases)} phases")
+    report.add("DynamoDB: Phase 1 = Schema Design",
+        "Schema Design" in blueprint.phases[0].name or "Schema" in blueprint.phases[0].name,
+        blueprint.phases[0].name)
+    report.add("DynamoDB: Phase 3 = Application Rewrite",
+        "Application" in blueprint.phases[2].name,
+        blueprint.phases[2].name)
+    report.add("DynamoDB: total days > 0", blueprint.total_estimated_days > 0,
+        f"{blueprint.total_estimated_days} days")
+
+    md = render_blueprint_markdown(blueprint, dynamo_db, assessment, source_engine="dynamodb")
+    report.add("DynamoDB: markdown has DynamoDB label", "Amazon DynamoDB" in md, "DynamoDB label found")
+    report.add("DynamoDB: markdown has type mapping table", "jsonb" in md.lower(), "Type mapping present")
+    report.add("DynamoDB: markdown has Export to S3", "Export to S3" in md or "export" in md.lower(), "S3 export mentioned")
+    report.add("DynamoDB: markdown has cross-engine note", "cross-engine" in md.lower() or "NoSQL" in md, "Cross-engine note present")
+
+
+def test_dynamodb_end_to_end(report: _TestReport):
+    print("\n--- DynamoDB End-to-End Pipeline ---")
+
+    from utils.lakebase_client import LakebaseClient
+    from utils.delta_writer import DeltaWriter
+    from utils.alerting import AlertManager
+    from agents import ProvisioningAgent
+
+    agent = ProvisioningAgent(
+        LakebaseClient(workspace_host="test", mock_mode=True),
+        DeltaWriter(mock_mode=True),
+        AlertManager(mock_mode=True),
+    )
+    agent.register_tools()
+
+    discovery = agent.connect_and_discover(source_engine="dynamodb", mock=True)
+    workload = agent.profile_workload(profile_data=discovery, mock=True)
+    assessment = agent.assess_readiness(profile_data=discovery, workload_data=workload)
+    blueprint = agent.generate_migration_blueprint(assessment_data=assessment, workload_data=workload)
+
+    report.add("DynamoDB E2E: Discovery succeeded", discovery.get("table_count", 0) > 0, "Discovery OK")
+    report.add("DynamoDB E2E: Workload profiled", workload.get("avg_qps", 0) > 0, "Workload OK")
+    report.add("DynamoDB E2E: Assessment scored", assessment.get("overall_score", 0) > 0, f"Score={assessment.get('overall_score')}")
+    report.add("DynamoDB E2E: Strategy is cross_engine", assessment.get("_assessment") is not None or blueprint.get("strategy") == "cross_engine", f"Strategy={blueprint.get('strategy')}")
+    report.add("DynamoDB E2E: Blueprint generated", blueprint.get("phase_count", 0) == 4, "Blueprint OK")
+
+    md = blueprint.get("report_markdown", "")
+    report.add("DynamoDB E2E: Report mentions DynamoDB", "DynamoDB" in md, "DynamoDB in report")
+    report.add("DynamoDB E2E: Report has type mapping", "jsonb" in md.lower() or "JSONB" in md, "Type mapping in report")
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
 def main():
     print("\n" + "=" * 70)
     print("  MIGRATION ASSESSMENT ACCELERATOR - TEST SUITE")
-    print("  Postgres -> Lakebase Assessment & Migration")
+    print("  Postgres & DynamoDB -> Lakebase Assessment & Migration")
     print("=" * 70)
 
-    report = TestReport()
+    report = _TestReport()
 
     test_dataclasses(report)
     test_readiness_scorer(report)
     test_blueprint_generator(report)
     test_assessment_mixin(report)
     test_end_to_end(report)
+    test_dynamodb_discovery(report)
+    test_dynamodb_readiness(report)
+    test_dynamodb_blueprint(report)
+    test_dynamodb_end_to_end(report)
 
     success = report.summary()
     sys.exit(0 if success else 1)

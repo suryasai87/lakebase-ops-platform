@@ -16,6 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from config.migration_profiles import (
+    ENGINE_KIND,
     AssessmentResult,
     DatabaseProfile,
     MigrationBlueprint,
@@ -32,6 +33,7 @@ _ENGINE_LABELS = {
     "self-managed-postgresql": "Self-Managed PostgreSQL",
     "alloydb-postgresql": "Google AlloyDB for PostgreSQL",
     "supabase-postgresql": "Supabase PostgreSQL",
+    "dynamodb": "Amazon DynamoDB",
 }
 
 _AUTH_MIGRATION_NOTES = {
@@ -42,6 +44,7 @@ _AUTH_MIGRATION_NOTES = {
     "self-managed-postgresql": "Switch authentication from password/certificate to Databricks OAuth tokens",
     "alloydb-postgresql": "Switch authentication from GCP IAM DB auth to Databricks OAuth tokens",
     "supabase-postgresql": "Switch authentication from Supabase JWT/API keys to Databricks OAuth tokens",
+    "dynamodb": "Switch authentication from AWS IAM roles/access keys to Databricks OAuth tokens",
 }
 
 _POOLING_NOTES = {
@@ -52,6 +55,7 @@ _POOLING_NOTES = {
     "self-managed-postgresql": "Update connection pooling (replace PgBouncer/pgpool-II with app-side pooling)",
     "alloydb-postgresql": "Update connection pooling (replace AlloyDB Auth Proxy with direct app-side pooling)",
     "supabase-postgresql": "Update connection pooling (replace Supavisor pooler with app-side pooling)",
+    "dynamodb": "N/A for DynamoDB (HTTP API, no persistent connections); configure app-side connection pooling for Lakebase",
 }
 
 _DECOMMISSION_STEPS = {
@@ -62,6 +66,7 @@ _DECOMMISSION_STEPS = {
     "self-managed-postgresql": "Decommission self-managed PostgreSQL servers after validation period; archive WAL backups",
     "alloydb-postgresql": "Delete AlloyDB cluster after validation period (recommended: 2 weeks); revoke IAM bindings",
     "supabase-postgresql": "Pause or delete Supabase project after validation period (recommended: 2 weeks); revoke API keys",
+    "dynamodb": "Disable DynamoDB Streams consumers, scale down provisioned capacity to minimum, delete tables after validation period (recommended: 2 weeks)",
 }
 
 _NETWORK_PREREQS = {
@@ -72,6 +77,7 @@ _NETWORK_PREREQS = {
     "self-managed-postgresql": "Network connectivity between source host and Lakebase endpoint (VPN, Direct Connect, or public)",
     "alloydb-postgresql": "Network connectivity between AlloyDB VPC and Lakebase endpoint (Private Service Connect or public)",
     "supabase-postgresql": "Network connectivity between Supabase project and Lakebase endpoint (public; use connection string from Supabase dashboard)",
+    "dynamodb": "VPC endpoint for DynamoDB and S3 gateway endpoint for Export to S3; network connectivity to Lakebase endpoint",
 }
 
 
@@ -201,8 +207,26 @@ def render_blueprint_markdown(
         lines.append("- **Supabase note**: Supabase-specific schemas (`auth`, `storage`, `realtime`) "
                      "are platform-managed and do not migrate. Replace Supabase Auth with Databricks "
                      "identity management. Replace Supabase Realtime with application-level WebSockets.")
+    elif source_engine == "dynamodb":
+        lines.append("- **DynamoDB note**: This is a cross-engine NoSQL-to-relational migration. "
+                     "Schema must be redesigned from access patterns, not ported directly. "
+                     "Use DynamoDB Export to S3 (requires PITR) for zero-impact data extraction.")
+        lines.append("\n**DynamoDB Type Mapping:**\n")
+        lines.append("| DynamoDB | PostgreSQL | Notes |")
+        lines.append("|----------|-----------|-------|")
+        lines.append("| S (String) | `text` | |")
+        lines.append("| N (Number) | `numeric` | Preserves arbitrary precision |")
+        lines.append("| B (Binary) | `bytea` | |")
+        lines.append("| BOOL | `boolean` | |")
+        lines.append("| NULL | SQL `NULL` | |")
+        lines.append("| SS (String Set) | `text[]` | Unique, unordered |")
+        lines.append("| NS (Number Set) | `numeric[]` | Unique, unordered |")
+        lines.append("| L (List) | `jsonb` | Ordered, mixed types |")
+        lines.append("| M (Map) | `jsonb` or flattened columns | Nested maps stay as JSONB |")
 
-    if assessment.supported_extensions or assessment.unsupported_extensions:
+    is_nosql = ENGINE_KIND.get(source_engine) == "nosql"
+
+    if not is_nosql and (assessment.supported_extensions or assessment.unsupported_extensions):
         lines.append("\n---\n## Extension Compatibility\n")
         if assessment.supported_extensions:
             lines.append(f"**Supported ({len(assessment.supported_extensions)}):** {', '.join(sorted(assessment.supported_extensions))}")
@@ -246,6 +270,9 @@ def _select_strategy(
     workload: WorkloadProfile | None,
     source_engine: str = "aurora-postgresql",
 ) -> MigrationStrategy:
+    if source_engine == "dynamodb":
+        return MigrationStrategy.CROSS_ENGINE
+
     if db.pg_version and not db.pg_version.startswith(("14", "15", "16", "17")):
         return MigrationStrategy.CROSS_ENGINE
 
@@ -269,6 +296,28 @@ def _phase_1_schema(
     db_name: str,
     source_engine: str = "aurora-postgresql",
 ) -> MigrationPhase:
+    if source_engine == "dynamodb":
+        steps = [
+            "Analyze DynamoDB access patterns (GetItem, Query, Scan, BatchWrite) to design relational schema",
+            "Map partition keys and sort keys to PostgreSQL composite primary keys",
+            "Convert GSIs to PostgreSQL secondary indexes (B-tree, GIN for JSONB)",
+            "Design JSONB columns for nested Map/List attributes; add generated columns for hot query paths",
+            "Normalize single-table design patterns into separate relational tables with foreign keys",
+            "Create schema in Lakebase target branch and validate with sample data",
+        ]
+        commands = [
+            "# DynamoDB type mapping: S->text, N->numeric, B->bytea, M->jsonb, L->jsonb, SS->text[], BOOL->boolean",
+            "# Design SQL schema based on access patterns, not DynamoDB table structure",
+        ]
+        return MigrationPhase(
+            phase_number=1,
+            name="Schema Design & Relational Modeling",
+            description="Design a relational schema from DynamoDB access patterns. Map key schemas to primary keys, GSIs to indexes, and nested documents to JSONB columns.",
+            steps=steps,
+            estimated_days=max(5, (db.gsi_count or 0) * 0.5 + 5),
+            commands=commands,
+        )
+
     engine_label = _ENGINE_LABELS.get(source_engine, source_engine)
 
     steps = [
@@ -388,13 +437,28 @@ def _phase_2_data(
         ]
         est_days = max(3, db.size_gb / 100 + 2)
     else:
-        steps = [
-            "Evaluate cross-engine migration tooling (AWS DMS, AWS SCT, pgloader)",
-            "Convert schema using Schema Conversion Tool",
-            "Migrate data using DMS full load + CDC or pgloader",
-            "Validate data integrity post-migration",
-        ]
-        commands = []
+        if source_engine == "dynamodb":
+            steps = [
+                "Enable PITR on all DynamoDB tables (required for Export to S3)",
+                "Export DynamoDB tables to S3 using ExportTableToPointInTime (zero impact on table performance)",
+                "Parse DynamoDB JSON export files and transform to relational format",
+                "Bulk load transformed data into Lakebase using COPY or batch INSERT",
+                "Verify record counts match (DynamoDB ItemCount vs PostgreSQL row count)",
+                "Set up incremental sync via DynamoDB Streams + Lambda if cutover window is needed",
+            ]
+            commands = [
+                "# Export via AWS CLI (requires PITR enabled)",
+                "aws dynamodb export-table-to-point-in-time --table-arn <arn> --s3-bucket <bucket> --export-format DYNAMODB_JSON",
+                "# Parse and transform DynamoDB JSON to SQL INSERT statements or CSV for COPY",
+            ]
+        else:
+            steps = [
+                "Evaluate cross-engine migration tooling (AWS DMS, AWS SCT, pgloader)",
+                "Convert schema using Schema Conversion Tool",
+                "Migrate data using DMS full load + CDC or pgloader",
+                "Validate data integrity post-migration",
+            ]
+            commands = []
         est_days = max(10, db.size_gb / 50 + 5)
 
     return MigrationPhase(
@@ -415,6 +479,28 @@ def _phase_3_application(
 ) -> MigrationPhase:
     auth_note = _AUTH_MIGRATION_NOTES.get(source_engine, _AUTH_MIGRATION_NOTES["aurora-postgresql"])
     pool_note = _POOLING_NOTES.get(source_engine, _POOLING_NOTES["aurora-postgresql"])
+
+    if source_engine == "dynamodb":
+        steps = [
+            f"Rewrite DynamoDB SDK calls (GetItem, PutItem, Query, Scan) to SQL queries via psycopg",
+            auth_note,
+            "Replace DynamoDB Streams + Lambda consumers with application-level triggers or Lakeflow Connect",
+            "Replace DAX caching layer with application-side caching (Redis) or PostgreSQL materialized views",
+            "Update IAM-based access to Databricks OAuth token authentication",
+            "Configure Synced Tables for Delta Lake integration (OLTP-to-OLAP sync)",
+        ]
+        return MigrationPhase(
+            phase_number=3,
+            name="Application Rewrite",
+            description="Rewrite DynamoDB API calls to SQL, replace Streams consumers, and update authentication to Databricks OAuth.",
+            steps=steps,
+            estimated_days=10,
+            commands=[
+                f'DATABASE_URL = "postgresql://<user>:<oauth_token>@{lakebase_ep}:5432/{db_name}?sslmode=require"',
+                "# Replace: dynamodb.get_item(TableName='Users', Key={'userId': {'S': '123'}})",
+                "# With:    cur.execute('SELECT * FROM users WHERE user_id = %s', ('123',))",
+            ],
+        )
 
     steps = [
         f"Update application connection string to Lakebase endpoint ({lakebase_ep})",

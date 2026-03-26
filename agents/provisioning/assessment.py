@@ -1,11 +1,11 @@
 """
 AssessmentMixin — Migration Assessment
 
-Provides tools for assessing external PostgreSQL databases (Aurora, RDS, Cloud SQL)
+Provides tools for assessing external databases (PostgreSQL engines and DynamoDB)
 for migration to Databricks Lakebase. All source connections are read-only.
 
 Contains:
-- connect_and_discover: Connect to source DB and inventory schema/extensions/functions
+- connect_and_discover: Connect to source DB and inventory schema/extensions/features
 - profile_workload: Analyze query patterns, QPS, TPS, and connection usage
 - compute_readiness_score: Score the database against Lakebase constraints
 - generate_migration_blueprint: Produce a 4-phase migration plan
@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from sql import assessment_queries as aq
 from config.migration_profiles import (
+    ENGINE_KIND,
     DatabaseProfile,
     ExtensionInfo,
     FunctionInfo,
@@ -71,12 +72,14 @@ class AssessmentMixin:
                 "self-managed-postgresql": self._mock_discover_self_managed,
                 "alloydb-postgresql": self._mock_discover_alloydb,
                 "supabase-postgresql": self._mock_discover_supabase,
+                "dynamodb": self._mock_discover_dynamodb,
             }
             discover_fn = _mock_engines.get(source_engine, self._mock_discover)
             db_profile = discover_fn(database or "app_production")
         else:
             db_profile = self._live_discover(endpoint, database, source_user, source_password)
 
+        is_nosql = ENGINE_KIND.get(source_engine) == "nosql"
         engine = SourceEngine(source_engine)
         _mock_endpoints = {
             "aurora-postgresql": "mock-aurora.cluster-xxx.us-east-1.rds.amazonaws.com",
@@ -86,42 +89,70 @@ class AssessmentMixin:
             "self-managed-postgresql": "pg-primary.internal.example.com",
             "alloydb-postgresql": "10.0.0.5",
             "supabase-postgresql": "db.abcdefghijkl.supabase.co",
+            "dynamodb": "dynamodb.us-east-1.amazonaws.com",
         }
         profile = MigrationProfile(
             profile_id=profile_id,
             source_engine=engine,
             source_endpoint=endpoint or _mock_endpoints.get(source_engine, "mock-source.example.com"),
-            source_version=db_profile.pg_version,
+            source_version=db_profile.pg_version if not is_nosql else "DynamoDB",
             source_region=region,
             databases=[db_profile],
         )
 
-        summary = {
-            "profile_id": profile_id,
-            "source_engine": engine.value,
-            "source_endpoint": profile.source_endpoint,
-            "source_version": db_profile.pg_version,
-            "database": db_profile.name,
-            "size_gb": db_profile.size_gb,
-            "table_count": db_profile.table_count,
-            "schema_count": db_profile.schema_count,
-            "extension_count": len(db_profile.extensions),
-            "function_count": len(db_profile.functions),
-            "trigger_count": len(db_profile.triggers),
-            "sequence_count": db_profile.sequence_count,
-            "materialized_view_count": db_profile.materialized_view_count,
-            "custom_type_count": db_profile.custom_type_count,
-            "foreign_key_count": db_profile.foreign_key_count,
-            "has_logical_replication": db_profile.has_logical_replication,
-            "extensions": [e.name for e in db_profile.extensions],
-            "_profile": profile,
-        }
+        if is_nosql:
+            summary = {
+                "profile_id": profile_id,
+                "source_engine": engine.value,
+                "source_endpoint": profile.source_endpoint,
+                "source_version": "DynamoDB",
+                "database": db_profile.name,
+                "size_gb": db_profile.size_gb,
+                "table_count": db_profile.table_count,
+                "billing_mode": db_profile.billing_mode or "on-demand",
+                "gsi_count": db_profile.gsi_count or 0,
+                "lsi_count": db_profile.lsi_count or 0,
+                "streams_enabled": db_profile.streams_enabled or False,
+                "ttl_enabled": db_profile.ttl_enabled or False,
+                "pitr_enabled": db_profile.pitr_enabled or False,
+                "global_table_regions": db_profile.global_table_regions or [],
+                "item_size_avg_bytes": db_profile.item_size_avg_bytes or 0,
+                "_profile": profile,
+            }
+        else:
+            summary = {
+                "profile_id": profile_id,
+                "source_engine": engine.value,
+                "source_endpoint": profile.source_endpoint,
+                "source_version": db_profile.pg_version,
+                "database": db_profile.name,
+                "size_gb": db_profile.size_gb,
+                "table_count": db_profile.table_count,
+                "schema_count": db_profile.schema_count,
+                "extension_count": len(db_profile.extensions),
+                "function_count": len(db_profile.functions),
+                "trigger_count": len(db_profile.triggers),
+                "sequence_count": db_profile.sequence_count,
+                "materialized_view_count": db_profile.materialized_view_count,
+                "custom_type_count": db_profile.custom_type_count,
+                "foreign_key_count": db_profile.foreign_key_count,
+                "has_logical_replication": db_profile.has_logical_replication,
+                "extensions": [e.name for e in db_profile.extensions],
+                "_profile": profile,
+            }
 
-        logger.info(
-            "Discovered %s: %.1f GB, %d tables, %d extensions, %d functions",
-            db_profile.name, db_profile.size_gb, db_profile.table_count,
-            len(db_profile.extensions), len(db_profile.functions),
-        )
+        if is_nosql:
+            logger.info(
+                "Discovered %s: %.1f GB, %d tables, %d GSIs, billing=%s",
+                db_profile.name, db_profile.size_gb, db_profile.table_count,
+                db_profile.gsi_count or 0, db_profile.billing_mode or "unknown",
+            )
+        else:
+            logger.info(
+                "Discovered %s: %.1f GB, %d tables, %d extensions, %d functions",
+                db_profile.name, db_profile.size_gb, db_profile.table_count,
+                len(db_profile.extensions), len(db_profile.functions),
+            )
 
         return summary
 
@@ -135,8 +166,15 @@ class AssessmentMixin:
         """
         Profile workload patterns from pg_stat_statements and pg_stat_activity.
         """
+        engine_str = ""
+        if profile_data and "_profile" in profile_data:
+            engine_str = profile_data["_profile"].source_engine.value
+
         if mock:
-            workload = self._mock_workload()
+            if ENGINE_KIND.get(engine_str) == "nosql":
+                workload = self._mock_workload_dynamodb()
+            else:
+                workload = self._mock_workload()
         else:
             workload = self._live_workload(profile_data, source_user, source_password)
 
@@ -183,7 +221,8 @@ class AssessmentMixin:
         else:
             db_profile = self._mock_discover("app_production")
 
-        assessment = _compute_score(db_profile, workload)
+        source_engine = profile.source_engine.value if profile else ""
+        assessment = _compute_score(db_profile, workload, source_engine)
 
         if profile:
             profile.assessment = assessment
@@ -240,14 +279,14 @@ class AssessmentMixin:
         else:
             db_profile = self._mock_discover("app_production")
 
+        engine_str = profile.source_engine.value if profile else "aurora-postgresql"
+
         if assessment is None:
-            assessment = _compute_score(db_profile, workload)
+            assessment = _compute_score(db_profile, workload, engine_str)
 
         src_ep = source_endpoint
         if profile and profile.source_endpoint:
             src_ep = profile.source_endpoint
-
-        engine_str = profile.source_engine.value if profile else "aurora-postgresql"
         blueprint = _generate_blueprint(
             db_profile=db_profile,
             assessment=assessment,
@@ -374,6 +413,80 @@ class AssessmentMixin:
             hot_tables=["orders", "order_items", "sessions", "user_events"],
             connection_count_avg=120,
             connection_count_peak=350,
+        )
+
+    def _mock_discover_dynamodb(self, db_name: str) -> DatabaseProfile:
+        """Mock DynamoDB profile - NoSQL key-value/document store."""
+        tables = [
+            TableProfile("default", "Users", 2_500_000, 1_200_000_000, 3, False, False, 0),
+            TableProfile("default", "Orders", 15_000_000, 8_500_000_000, 5, False, False, 0),
+            TableProfile("default", "OrderItems", 45_000_000, 12_000_000_000, 2, False, False, 0),
+            TableProfile("default", "Products", 500_000, 250_000_000, 4, False, False, 0),
+            TableProfile("default", "Inventory", 1_000_000, 400_000_000, 1, False, False, 0),
+            TableProfile("default", "Sessions", 8_000_000, 3_200_000_000, 0, False, False, 0),
+            TableProfile("default", "AuditLog", 50_000_000, 20_000_000_000, 1, False, False, 0),
+            TableProfile("default", "UserEvents", 100_000_000, 45_000_000_000, 3, False, False, 0),
+            TableProfile("default", "Notifications", 10_000_000, 3_000_000_000, 1, False, False, 0),
+            TableProfile("default", "Config", 500, 50_000, 0, False, False, 0),
+        ]
+        total_size = sum(t.size_bytes for t in tables)
+        return DatabaseProfile(
+            name=db_name or "dynamodb-account",
+            size_bytes=total_size,
+            size_gb=round(total_size / (1024 ** 3), 2),
+            table_count=len(tables),
+            schema_count=1,
+            schemas=["default"],
+            tables=tables,
+            extensions=[],
+            functions=[],
+            triggers=[],
+            sequence_count=0,
+            materialized_view_count=0,
+            custom_type_count=0,
+            foreign_key_count=0,
+            has_logical_replication=False,
+            replication_slots=[],
+            pg_version="",
+            billing_mode="on-demand",
+            gsi_count=8,
+            lsi_count=2,
+            streams_enabled=True,
+            ttl_enabled=True,
+            pitr_enabled=True,
+            global_table_regions=[],
+            item_size_avg_bytes=4200,
+            dynamo_table_details=[
+                {"name": "Users", "key_schema": "PK (userId)", "billing": "on-demand", "gsi_count": 2, "item_count": 2_500_000},
+                {"name": "Orders", "key_schema": "PK (orderId), SK (createdAt)", "billing": "on-demand", "gsi_count": 3, "item_count": 15_000_000},
+                {"name": "OrderItems", "key_schema": "PK (orderId), SK (itemId)", "billing": "on-demand", "gsi_count": 1, "item_count": 45_000_000},
+                {"name": "Products", "key_schema": "PK (productId)", "billing": "provisioned", "gsi_count": 2, "item_count": 500_000},
+                {"name": "Sessions", "key_schema": "PK (sessionId)", "billing": "on-demand", "gsi_count": 0, "item_count": 8_000_000},
+                {"name": "UserEvents", "key_schema": "PK (userId), SK (eventTimestamp)", "billing": "on-demand", "gsi_count": 0, "item_count": 100_000_000},
+            ],
+        )
+
+    def _mock_workload_dynamodb(self) -> WorkloadProfile:
+        """Mock DynamoDB workload - RCU/WCU mapped to QPS/TPS."""
+        return WorkloadProfile(
+            total_queries=800,
+            total_calls=50_000_000,
+            reads_pct=80.0,
+            writes_pct=20.0,
+            avg_qps=3_500,
+            peak_qps=12_000,
+            avg_tps=850,
+            p99_latency_ms=8.0,
+            top_queries=[
+                {"query": "GetItem: Users (userId)", "calls": 20_000_000, "mean_ms": 3.0},
+                {"query": "Query: Orders (userId, createdAt)", "calls": 10_000_000, "mean_ms": 5.0},
+                {"query": "PutItem: UserEvents", "calls": 8_000_000, "mean_ms": 4.0},
+                {"query": "Query: OrderItems (orderId)", "calls": 5_000_000, "mean_ms": 3.5},
+                {"query": "Scan: Products (category GSI)", "calls": 2_000_000, "mean_ms": 15.0},
+            ],
+            hot_tables=["Users", "Orders", "UserEvents", "Sessions"],
+            connection_count_avg=80,
+            connection_count_peak=250,
         )
 
     def _mock_discover_rds(self, db_name: str) -> DatabaseProfile:

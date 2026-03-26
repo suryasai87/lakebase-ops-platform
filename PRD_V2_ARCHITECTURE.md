@@ -1,8 +1,8 @@
 # LakebaseOps Platform — V2 Architecture & Implementation Reference
 
-**Version:** 2.1
+**Version:** 2.2
 **Last Updated:** 2026-03-11
-**Status:** Implemented & Tested (51 tools, 3 agents, 7 source engines, 3 dashboard enrichments)
+**Status:** Implemented & Tested (51 tools, 3 agents, 8 source engines, 3 dashboard enrichments)
 
 ---
 
@@ -73,6 +73,33 @@ Replaced placeholder implementations with real queries:
 
 ### 6. Modular Architecture
 All three monolithic agent files (~800+ lines each) have been refactored into sub-packages with a mixin pattern.
+
+---
+
+## I-C. Summary of Changes from V2.1 to V2.2
+
+### 11. Amazon DynamoDB Source Engine (7 -> 8)
+
+Added DynamoDB as the first NoSQL source engine, introducing cross-engine (NoSQL-to-relational) migration assessment:
+
+| Engine | Cloud | Type | Key Features |
+|--------|-------|------|-------------|
+| Amazon DynamoDB | AWS | NoSQL | GSI/LSI, Streams, TTL, PITR, DAX, Global Tables, on-demand/provisioned billing |
+
+**ENGINE_KIND discriminator:** New `ENGINE_KIND` dictionary in `config/migration_profiles.py` classifies engines as `pg` or `nosql`, enabling conditional logic throughout the assessment pipeline.
+
+**DynamoDB-specific DatabaseProfile fields:** `billing_mode`, `gsi_count`, `lsi_count`, `streams_enabled`, `ttl_enabled`, `pitr_enabled`, `global_table_regions`, `item_size_avg_bytes`, `dynamo_table_details` (all `Optional`, `None` for PostgreSQL engines).
+
+**Files changed:**
+- `config/migration_profiles.py` - Added `DYNAMODB` to `SourceEngine`, `ENGINE_KIND` map, DynamoDB-specific fields to `DatabaseProfile`
+- `agents/provisioning/assessment.py` - Added `_mock_discover_dynamodb()`, `_mock_workload_dynamodb()`, conditional summary fields for NoSQL
+- `utils/readiness_scorer.py` - Added `DYNAMODB_FEATURE_SUPPORT`, `DYNAMODB_FEATURE_WORKAROUNDS`, NoSQL scoring paths for all 6 dimensions
+- `utils/blueprint_generator.py` - DynamoDB engine maps, `CROSS_ENGINE` strategy, DynamoDB-specific phases (relational modeling, S3 export, ETL, app rewrite)
+- `config/pricing.py` - DynamoDB on-demand pricing entry with WRU/RRU formulas
+- `app/backend/routers/assessment.py` - Feature matrix for NoSQL, DynamoDB cost estimation
+- `app/frontend/src/pages/Assessment.tsx` - DynamoDB engine option, conditional discovery display, `NOSQL_ENGINES` set
+- `app/frontend/src/components/ExtensionMatrix.tsx` - Conditional "Feature Compatibility" title for NoSQL
+- `test_assessment.py` - 4 new DynamoDB tests (discovery, readiness, blueprint, end-to-end)
 
 ---
 
@@ -148,7 +175,7 @@ lakebase-ops-platform/
 ├── config/
 │   ├── __init__.py
 │   ├── settings.py                  # All constants: workspace, catalog, tables, thresholds
-│   ├── migration_profiles.py        # Assessment dataclasses + SourceEngine enum (7 engines)
+│   ├── migration_profiles.py        # Assessment dataclasses + SourceEngine enum (8 engines)
 │   └── pricing.py                   # Static pricing registry: per-engine, per-region rates + formulas
 |
 ├── framework/
@@ -446,11 +473,13 @@ Simulation Results:
     - vacuum_history: 4 records
 
 Assessment Coverage:
-  - 7 source engines tested (Aurora, RDS, Cloud SQL, Azure, Self-Managed, AlloyDB, Supabase)
-  - Per-engine extension profiles verified (unique extensions per engine)
+  - 8 source engines tested (Aurora, RDS, Cloud SQL, Azure, Self-Managed, AlloyDB, Supabase, DynamoDB)
+  - Per-engine extension/feature profiles verified (unique extensions per PG engine, feature matrix for DynamoDB)
   - Region-aware cost estimation verified across AWS, GCP, Azure regions
   - Extension compatibility matrix validated (supported/workaround/unsupported)
-  - Pricing formulas verified against config/pricing.py registry
+  - DynamoDB feature compatibility matrix validated (Streams, TTL, DAX, Global Tables)
+  - DynamoDB cross-engine blueprint verified (relational modeling, S3 export, ETL, app rewrite)
+  - Pricing formulas verified against config/pricing.py registry (including DynamoDB WRU/RRU)
 
 Verification:
   - No information_schema references in agents/
@@ -471,7 +500,7 @@ Verification:
 | `POST` | `/api/assessment/profile/{id}` | `assessment.py` | Profile workload (QPS, TPS, connections) |
 | `POST` | `/api/assessment/readiness/{id}` | `assessment.py` | Score readiness (6 dimensions) |
 | `POST` | `/api/assessment/blueprint/{id}` | `assessment.py` | Generate 4-phase migration blueprint |
-| `GET` | `/api/assessment/extension-matrix/{id}` | `assessment.py` | Extension compatibility matrix |
+| `GET` | `/api/assessment/extension-matrix/{id}` | `assessment.py` | Extension (PG) or feature (DynamoDB) compatibility matrix |
 | `GET` | `/api/assessment/timeline/{id}` | `assessment.py` | Migration timeline for Gantt chart |
 | `GET` | `/api/assessment/cost-estimate/{id}` | `assessment.py` | Region-aware cost comparison |
 | `GET` | `/api/assessment/regions/{engine}` | `assessment.py` | Available regions for engine |
@@ -520,7 +549,7 @@ SOURCE_ENGINES = {
 }
 ```
 
-### SourceEngine Enum (7 engines)
+### SourceEngine Enum (8 engines)
 
 ```python
 class SourceEngine(Enum):
@@ -531,7 +560,27 @@ class SourceEngine(Enum):
     SELF_MANAGED_POSTGRESQL = "self-managed-postgresql"
     ALLOYDB_POSTGRESQL = "alloydb-postgresql"
     SUPABASE_POSTGRESQL = "supabase-postgresql"
+    AURORA_MYSQL = "aurora-mysql"
+    DYNAMODB = "dynamodb"
 ```
+
+### ENGINE_KIND Discriminator
+
+```python
+ENGINE_KIND: dict[str, str] = {
+    "dynamodb": "nosql",
+    "aurora-postgresql": "pg",
+    "rds-postgresql": "pg",
+    "cloud-sql-postgresql": "pg",
+    "azure-postgresql": "pg",
+    "self-managed-postgresql": "pg",
+    "alloydb-postgresql": "pg",
+    "supabase-postgresql": "pg",
+    "aurora-mysql": "pg",
+}
+```
+
+Used throughout the assessment pipeline to branch between PostgreSQL and NoSQL logic.
 
 ---
 
