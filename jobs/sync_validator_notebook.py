@@ -12,7 +12,7 @@ os.environ.setdefault("OPS_SCHEMA", "lakebase_ops")
 
 # COMMAND ----------
 
-from agents.health_agent import HealthAgent
+from agents.health import HealthAgent
 from config import settings
 
 project_id = dbutils.widgets.get("project_id") if "dbutils" in dir() else settings.LAKEBASE_PROJECT_ID

@@ -33,12 +33,6 @@ class BranchingPattern(Enum):
     MULTI_TENANT_SCHEMA = "multi_tenant_schema"
 
 
-class AlertSeverity(Enum):
-    INFO = "info"
-    WARNING = "warning"
-    CRITICAL = "critical"
-
-
 class RemediationRisk(Enum):
     LOW = "low"      # Auto-execute: vacuum, idle connection kill
     MEDIUM = "medium" # Requires approval: index drop, parameter change
@@ -197,6 +191,7 @@ DELTA_TABLES = {
     "branch_lifecycle": f"{OPS_CATALOG}.{OPS_SCHEMA}.branch_lifecycle",
     "data_archival": f"{OPS_CATALOG}.{OPS_SCHEMA}.data_archival_history",
     "migration_assessments": f"{OPS_CATALOG}.{OPS_SCHEMA}.migration_assessments",
+    "lakehouse_sync_status": f"{OPS_CATALOG}.{OPS_SCHEMA}.lakehouse_sync_status",
 }
 
 # Job schedules

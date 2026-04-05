@@ -12,7 +12,7 @@ os.environ.setdefault("OPS_SCHEMA", "lakebase_ops")
 
 # COMMAND ----------
 
-from agents.provisioning_agent import ProvisioningAgent
+from agents.provisioning import ProvisioningAgent
 from config import settings
 
 action = dbutils.widgets.get("action") if "dbutils" in dir() else "enforce_ttl"

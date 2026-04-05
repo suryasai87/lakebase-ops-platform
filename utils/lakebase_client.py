@@ -237,6 +237,97 @@ class LakebaseClient:
         )
         return True
 
+    def update_project_tags(self, project_id: str, tags: dict[str, str]) -> dict:
+        """
+        Apply custom tags to a Lakebase project for cost attribution.
+        GAP-033: Uses PATCH /api/2.0/postgres/projects/{project_id}.
+
+        Args:
+            project_id: Project identifier.
+            tags: Key-value tag pairs.
+
+        Returns:
+            Updated project metadata.
+        """
+        if self.mock_mode:
+            logger.info(f"[MOCK] Updating tags on project {project_id}: {tags}")
+            return {"name": f"projects/{project_id}", "tags": tags, "status": "ACTIVE"}
+
+        body = {
+            "spec": {"custom_tags": tags},
+            "update_mask": "spec.custom_tags",
+        }
+        path = f"/api/2.0/postgres/projects/{project_id}"
+        return self._api_request("PATCH", path, body)
+
+    def get_project_tags(self, project_id: str) -> dict[str, str]:
+        """Retrieve current tags for a project."""
+        if self.mock_mode:
+            return {"domain": "mock", "environment": "dev", "managed_by": "lakebase-ops-platform"}
+
+        path = f"/api/2.0/postgres/projects/{project_id}"
+        resp = self._api_request("GET", path)
+        return resp.get("spec", {}).get("custom_tags", {})
+
+    def register_catalog(self, project_id: str, branch_id: str,
+                         catalog_name: str) -> dict:
+        """
+        Register a Lakebase database as a Unity Catalog catalog.
+        GAP-034: Uses POST /api/2.0/postgres/catalogs.
+
+        Args:
+            project_id: Lakebase project identifier.
+            branch_id: Branch containing the database.
+            catalog_name: Desired UC catalog name.
+
+        Returns:
+            Registration result with catalog_id.
+        """
+        if self.mock_mode:
+            logger.info(f"[MOCK] Registering catalog {catalog_name} for {project_id}/{branch_id}")
+            return {
+                "catalog_id": f"cat-{catalog_name[:8]}",
+                "catalog_name": catalog_name,
+                "project_id": project_id,
+                "branch_id": branch_id,
+                "status": "REGISTERED",
+            }
+
+        body = {
+            "project_id": project_id,
+            "branch_id": branch_id,
+            "catalog_name": catalog_name,
+        }
+        return self._api_request("POST", "/api/2.0/postgres/catalogs", body)
+
+    def get_catalog_status(self, catalog_id: str) -> dict:
+        """Check registration status of a Lakebase catalog."""
+        if self.mock_mode:
+            return {"catalog_id": catalog_id, "status": "ACTIVE"}
+        return self._api_request("GET", f"/api/2.0/postgres/catalogs/{catalog_id}")
+
+    def get_synced_table_status(self, table_name: str) -> dict:
+        """
+        Get official sync status for a synced table.
+        GAP-036: Uses GET /api/2.0/postgres/synced_tables/{table_name}.
+
+        Args:
+            table_name: Fully qualified synced table name.
+
+        Returns:
+            Sync status including state, last_sync_time, row counts.
+        """
+        if self.mock_mode:
+            return {
+                "table_name": table_name,
+                "status": "ACTIVE",
+                "last_sync_time": "2026-04-05T10:00:00Z",
+                "source_row_count": 5000000,
+                "target_row_count": 4999850,
+                "lag_seconds": 45,
+            }
+        return self._api_request("GET", f"/api/2.0/postgres/synced_tables/{table_name}")
+
     def reset_branch(self, project_id: str, branch_id: str) -> bool:
         """Reset a branch from its parent (e.g., nightly staging reset)."""
         if self.mock_mode:

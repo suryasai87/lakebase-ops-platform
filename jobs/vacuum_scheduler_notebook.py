@@ -12,7 +12,7 @@ os.environ.setdefault("OPS_SCHEMA", "lakebase_ops")
 
 # COMMAND ----------
 
-from agents.performance_agent import PerformanceAgent
+from agents.performance import PerformanceAgent
 from config import settings
 
 project_id = dbutils.widgets.get("project_id") if "dbutils" in dir() else settings.LAKEBASE_PROJECT_ID

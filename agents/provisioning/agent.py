@@ -69,6 +69,25 @@ class ProvisioningAgent(ProjectMixin, BranchingMixin, MigrationMixin, CICDMixin,
         self.register_tool("reset_branch_from_parent", self.reset_branch_from_parent,
                            "Sync branch from parent (nightly staging reset)", schedule="0 2 * * *")
 
+        # Git Hook Integration (GAP-037)
+        self.register_tool("create_branch_from_git_hook", self.create_branch_from_git_hook,
+                           "Create Lakebase branch from Git post-checkout hook")
+        self.register_tool("manage_pr_branch_lifecycle", self.manage_pr_branch_lifecycle,
+                           "Unified PR branch lifecycle (open/sync/close/merge)")
+
+        # QA Branch Workflow (GAP-039)
+        self.register_tool("create_qa_branch", self.create_qa_branch,
+                           "Create a QA validation branch for a release candidate")
+        self.register_tool("reset_branch_to_parent", self.reset_branch_to_parent,
+                           "Reset any branch back to its parent state")
+
+        # Read Replicas & HA (GAP-041)
+        self.register_tool("manage_read_replicas", self.manage_read_replicas,
+                           "Manage read replicas (list/add/remove/scale) for a branch")
+        self.register_tool("configure_ha", self.configure_ha,
+                           "Enable or disable high availability with AZ failover",
+                           risk_level="medium")
+
         # Schema Migration (Tasks 22-25)
         self.register_tool("apply_schema_migration", self.apply_schema_migration,
                            "Apply idempotent DDL migrations to a branch", risk_level="medium")

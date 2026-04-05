@@ -1,0 +1,222 @@
+##############################################################################
+# Lakebase Branch-per-PR Pipeline for Azure DevOps
+#
+# Demonstrates the branch-per-PR Lakebase workflow:
+#   1. Create ephemeral Lakebase branch from staging
+#   2. Wait for branch to become ACTIVE
+#   3. Apply database migrations
+#   4. Run integration tests against ephemeral branch
+#   5. Generate schema diff and post to pull request
+#   6. Clean up branch on pipeline completion
+#
+# Requirements:
+#   - Pipeline Variables: DATABRICKS_HOST, DATABRICKS_TOKEN (secret),
+#     LAKEBASE_PROJECT
+#   - Databricks CLI v0.278+ (installed during pipeline)
+#
+# Usage:
+#   Copy this file to your repo root as azure-pipelines.yml
+#   Create a pipeline in Azure DevOps pointing to this file
+##############################################################################
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  BRANCH_NAME: "ci-pr-$(System.PullRequest.PullRequestNumber)"
+  LAKEBASE_PROJECT: "$(LAKEBASE_PROJECT)"
+
+pool:
+  vmImage: "ubuntu-latest"
+
+stages:
+  # -------------------------------------------------------------------------
+  # Stage: Provision — Create ephemeral Lakebase branch
+  # -------------------------------------------------------------------------
+  - stage: Provision
+    displayName: "Provision Lakebase Branch"
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    jobs:
+      - job: CreateBranch
+        displayName: "Create Ephemeral Branch"
+        steps:
+          - task: Bash@3
+            displayName: "Install Databricks CLI"
+            inputs:
+              targetType: inline
+              script: |
+                curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+                databricks --version
+
+          - task: Bash@3
+            displayName: "Create Lakebase Branch"
+            env:
+              DATABRICKS_HOST: $(DATABRICKS_HOST)
+              DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+            inputs:
+              targetType: inline
+              script: |
+                echo "Creating Lakebase branch: $(BRANCH_NAME)"
+                databricks postgres create-branch \
+                  "projects/$(LAKEBASE_PROJECT)" \
+                  "$(BRANCH_NAME)" \
+                  --json '{
+                    "spec": {
+                      "source_branch": "projects/'"$(LAKEBASE_PROJECT)"'/branches/staging",
+                      "ttl": "14400s"
+                    }
+                  }'
+
+          - task: Bash@3
+            displayName: "Wait for Branch Active"
+            env:
+              DATABRICKS_HOST: $(DATABRICKS_HOST)
+              DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+            inputs:
+              targetType: inline
+              script: |
+                for i in $(seq 1 30); do
+                  STATUS=$(databricks postgres get-branch \
+                    "projects/$(LAKEBASE_PROJECT)/branches/$(BRANCH_NAME)" \
+                    --output json | jq -r '.status.state')
+                  echo "Attempt $i: Status=$STATUS"
+                  if [ "$STATUS" = "ACTIVE" ]; then
+                    echo "Branch is active!"
+                    exit 0
+                  fi
+                  sleep 10
+                done
+                echo "ERROR: Branch did not become active within timeout"
+                exit 1
+
+  # -------------------------------------------------------------------------
+  # Stage: Migrate — Apply database migrations
+  # -------------------------------------------------------------------------
+  - stage: Migrate
+    displayName: "Apply Migrations"
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    dependsOn: Provision
+    jobs:
+      - job: ApplyMigrations
+        displayName: "Run Migrations"
+        steps:
+          - task: Bash@3
+            displayName: "Install Databricks CLI"
+            inputs:
+              targetType: inline
+              script: |
+                curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+
+          - task: Bash@3
+            displayName: "Apply Migrations"
+            env:
+              DATABRICKS_HOST: $(DATABRICKS_HOST)
+              DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+            inputs:
+              targetType: inline
+              script: |
+                echo "Applying migrations to branch: $(BRANCH_NAME)"
+                # Replace with your migration tool:
+                # flyway migrate -url=jdbc:postgresql://${BRANCH_ENDPOINT}:5432/databricks_postgres
+
+  # -------------------------------------------------------------------------
+  # Stage: Test — Run integration tests
+  # -------------------------------------------------------------------------
+  - stage: Test
+    displayName: "Integration Tests"
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    dependsOn: Migrate
+    jobs:
+      - job: RunTests
+        displayName: "Run Tests"
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "3.11"
+
+          - task: Bash@3
+            displayName: "Install Dependencies"
+            inputs:
+              targetType: inline
+              script: |
+                pip install -r requirements.txt 2>/dev/null || true
+
+          - task: Bash@3
+            displayName: "Run Integration Tests"
+            inputs:
+              targetType: inline
+              script: |
+                echo "Running integration tests against ephemeral branch..."
+                # pytest tests/ -v --branch=$(BRANCH_NAME)
+
+  # -------------------------------------------------------------------------
+  # Stage: Diff — Generate and post schema diff
+  # -------------------------------------------------------------------------
+  - stage: SchemaDiff
+    displayName: "Schema Diff"
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    dependsOn: Test
+    jobs:
+      - job: PostDiff
+        displayName: "Generate and Post Schema Diff"
+        steps:
+          - task: Bash@3
+            displayName: "Install Databricks CLI"
+            inputs:
+              targetType: inline
+              script: |
+                curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+
+          - task: Bash@3
+            displayName: "Generate Schema Diff"
+            env:
+              DATABRICKS_HOST: $(DATABRICKS_HOST)
+              DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+            inputs:
+              targetType: inline
+              script: |
+                echo "Generating schema diff between staging and $(BRANCH_NAME)..."
+                # python cicd_templates/post_schema_diff.py \
+                #     --project "$(LAKEBASE_PROJECT)" \
+                #     --source-branch staging \
+                #     --target-branch "$(BRANCH_NAME)"
+
+  # -------------------------------------------------------------------------
+  # Stage: Cleanup — Delete ephemeral branch (always)
+  # -------------------------------------------------------------------------
+  - stage: Cleanup
+    displayName: "Cleanup"
+    condition: always()
+    dependsOn:
+      - SchemaDiff
+    jobs:
+      - job: DeleteBranch
+        displayName: "Delete Lakebase Branch"
+        steps:
+          - task: Bash@3
+            displayName: "Install Databricks CLI"
+            inputs:
+              targetType: inline
+              script: |
+                curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+
+          - task: Bash@3
+            displayName: "Delete Branch"
+            env:
+              DATABRICKS_HOST: $(DATABRICKS_HOST)
+              DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+            inputs:
+              targetType: inline
+              script: |
+                echo "Cleaning up Lakebase branch: $(BRANCH_NAME)"
+                databricks postgres delete-branch \
+                  "projects/$(LAKEBASE_PROJECT)/branches/$(BRANCH_NAME)" \
+                  || true
+                echo "Branch cleanup complete."

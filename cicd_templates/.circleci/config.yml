@@ -1,0 +1,185 @@
+##############################################################################
+# Lakebase Branch-per-PR Pipeline for CircleCI
+#
+# Demonstrates the branch-per-PR Lakebase workflow:
+#   1. Create ephemeral Lakebase branch from staging
+#   2. Wait for branch to become ACTIVE
+#   3. Apply database migrations
+#   4. Run integration tests against ephemeral branch
+#   5. Generate schema diff
+#   6. Clean up branch on completion
+#
+# Requirements:
+#   - Environment Variables (CircleCI Project Settings):
+#     DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT
+#   - Databricks CLI v0.278+
+#
+# Usage:
+#   Copy .circleci/ directory to your repo root
+##############################################################################
+
+version: 2.1
+
+# ---------------------------------------------------------------------------
+# Commands (reusable steps)
+# ---------------------------------------------------------------------------
+commands:
+  install-databricks-cli:
+    description: "Install the Databricks CLI"
+    steps:
+      - run:
+          name: Install Databricks CLI
+          command: |
+            curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+            databricks --version
+
+  compute-branch-name:
+    description: "Compute the Lakebase branch name from PR number"
+    steps:
+      - run:
+          name: Set branch name
+          command: |
+            if [ -n "$CIRCLE_PULL_REQUEST" ]; then
+              PR_NUM=$(echo "$CIRCLE_PULL_REQUEST" | grep -oE '[0-9]+$')
+              echo "export BRANCH_NAME=ci-pr-${PR_NUM}" >> "$BASH_ENV"
+            else
+              echo "export BRANCH_NAME=ci-build-${CIRCLE_BUILD_NUM}" >> "$BASH_ENV"
+            fi
+
+# ---------------------------------------------------------------------------
+# Jobs
+# ---------------------------------------------------------------------------
+jobs:
+  create-branch:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - install-databricks-cli
+      - compute-branch-name
+      - run:
+          name: Create Lakebase Branch
+          command: |
+            echo "Creating Lakebase branch: ${BRANCH_NAME}"
+            databricks postgres create-branch \
+              "projects/${LAKEBASE_PROJECT}" \
+              "${BRANCH_NAME}" \
+              --json '{
+                "spec": {
+                  "source_branch": "projects/'"${LAKEBASE_PROJECT}"'/branches/staging",
+                  "ttl": "14400s"
+                }
+              }'
+
+  wait-for-branch:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - install-databricks-cli
+      - compute-branch-name
+      - run:
+          name: Wait for Branch Active
+          command: |
+            for i in $(seq 1 30); do
+              STATUS=$(databricks postgres get-branch \
+                "projects/${LAKEBASE_PROJECT}/branches/${BRANCH_NAME}" \
+                --output json | jq -r '.status.state')
+              echo "Attempt $i: Status=$STATUS"
+              if [ "$STATUS" = "ACTIVE" ]; then
+                echo "Branch is active!"
+                exit 0
+              fi
+              sleep 10
+            done
+            echo "ERROR: Branch did not become active within timeout"
+            exit 1
+
+  apply-migrations:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - install-databricks-cli
+      - compute-branch-name
+      - run:
+          name: Apply Migrations
+          command: |
+            echo "Applying migrations to branch: ${BRANCH_NAME}"
+            # Replace with your migration tool:
+            # flyway migrate -url=jdbc:postgresql://${BRANCH_ENDPOINT}:5432/databricks_postgres
+
+  run-tests:
+    docker:
+      - image: cimg/python:3.11
+    steps:
+      - checkout
+      - compute-branch-name
+      - run:
+          name: Install Dependencies
+          command: |
+            pip install -r requirements.txt 2>/dev/null || true
+      - run:
+          name: Run Integration Tests
+          command: |
+            echo "Running integration tests against ephemeral branch..."
+            # pytest tests/ -v --branch=${BRANCH_NAME}
+
+  generate-schema-diff:
+    docker:
+      - image: cimg/python:3.11
+    steps:
+      - checkout
+      - install-databricks-cli
+      - compute-branch-name
+      - run:
+          name: Generate Schema Diff
+          command: |
+            echo "Generating schema diff between staging and ${BRANCH_NAME}..."
+            # python cicd_templates/post_schema_diff.py \
+            #     --project "${LAKEBASE_PROJECT}" \
+            #     --source-branch staging \
+            #     --target-branch "${BRANCH_NAME}" \
+            #     --pr-number "$(echo $CIRCLE_PULL_REQUEST | grep -oE '[0-9]+$')" \
+            #     --repo-owner "${CIRCLE_PROJECT_USERNAME}" \
+            #     --repo-name "${CIRCLE_PROJECT_REPONAME}"
+
+  cleanup-branch:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - install-databricks-cli
+      - compute-branch-name
+      - run:
+          name: Delete Lakebase Branch
+          command: |
+            echo "Cleaning up Lakebase branch: ${BRANCH_NAME}"
+            databricks postgres delete-branch \
+              "projects/${LAKEBASE_PROJECT}/branches/${BRANCH_NAME}" \
+              || true
+            echo "Branch cleanup complete."
+
+# ---------------------------------------------------------------------------
+# Workflows
+# ---------------------------------------------------------------------------
+workflows:
+  lakebase-branch-per-pr:
+    jobs:
+      - create-branch:
+          filters:
+            branches:
+              ignore: main
+      - wait-for-branch:
+          requires:
+            - create-branch
+      - apply-migrations:
+          requires:
+            - wait-for-branch
+      - run-tests:
+          requires:
+            - apply-migrations
+      - generate-schema-diff:
+          requires:
+            - run-tests
+      - cleanup-branch:
+          requires:
+            - generate-schema-diff

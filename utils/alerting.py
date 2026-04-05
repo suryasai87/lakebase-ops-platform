@@ -11,8 +11,12 @@ Supports:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 _OPS_CATALOG = os.getenv("OPS_CATALOG", "ops_catalog")
 _OPS_SCHEMA = os.getenv("OPS_SCHEMA", "lakebase_ops")
@@ -20,6 +24,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
+
+import requests
 
 logger = logging.getLogger("lakebase_ops.alerting")
 
@@ -133,12 +139,19 @@ class AlertManager:
             self._send_email(alert)
 
     def _send_slack(self, alert: Alert) -> None:
-        """Send Slack notification."""
+        """Send Slack notification via incoming webhook.
+
+        Requires channel config: {"webhook_url": "https://hooks.slack.com/services/..."}
+        """
         config = self._channel_configs.get("slack", {})
         webhook_url = config.get("webhook_url", "")
+        if not webhook_url:
+            logger.warning("Slack webhook_url not configured; skipping Slack alert")
+            return
+
         severity_emoji = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}
         emoji = severity_emoji.get(alert.severity.value, "📋")
-        message = {
+        payload = {
             "text": f"{emoji} *[{alert.severity.value.upper()}]* {alert.title}\n{alert.message}",
             "blocks": [
                 {
@@ -153,16 +166,125 @@ class AlertManager:
                 },
             ],
         }
-        logger.info(f"Slack alert sent: {alert.title}")
+        try:
+            resp = requests.post(
+                webhook_url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            logger.info(f"Slack alert sent: {alert.title}")
+        except requests.RequestException as exc:
+            logger.error(f"Slack alert failed for '{alert.title}': {exc}")
 
     def _send_pagerduty(self, alert: Alert) -> None:
-        """Send PagerDuty incident."""
+        """Send PagerDuty alert via Events API v2.
+
+        Requires channel config: {"routing_key": "<integration-key>"}
+        See: https://developer.pagerduty.com/docs/events-api-v2/trigger-events/
+        """
         config = self._channel_configs.get("pagerduty", {})
-        logger.info(f"PagerDuty incident created: {alert.title}")
+        routing_key = config.get("routing_key", "")
+        if not routing_key:
+            logger.warning("PagerDuty routing_key not configured; skipping PagerDuty alert")
+            return
+
+        severity_map = {
+            "info": "info",
+            "warning": "warning",
+            "critical": "critical",
+        }
+        payload = {
+            "routing_key": routing_key,
+            "event_action": "trigger",
+            "dedup_key": alert.alert_id,
+            "payload": {
+                "summary": f"[{alert.severity.value.upper()}] {alert.title}: {alert.message}",
+                "source": f"lakebase-ops/{alert.source_agent}",
+                "severity": severity_map.get(alert.severity.value, "error"),
+                "component": alert.source_agent,
+                "group": alert.project_id or "lakebase-ops",
+                "class": alert.metric_name or "general",
+                "custom_details": {
+                    "project_id": alert.project_id,
+                    "branch_id": alert.branch_id,
+                    "metric_name": alert.metric_name,
+                    "metric_value": alert.metric_value,
+                    "threshold": alert.threshold,
+                    "sop_action": alert.sop_action,
+                },
+            },
+        }
+        try:
+            resp = requests.post(
+                "https://events.pagerduty.com/v2/enqueue",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            logger.info(f"PagerDuty incident created: {alert.title} (dedup_key={alert.alert_id})")
+        except requests.RequestException as exc:
+            logger.error(f"PagerDuty alert failed for '{alert.title}': {exc}")
 
     def _send_email(self, alert: Alert) -> None:
-        """Send email notification."""
-        logger.info(f"Email sent: {alert.title}")
+        """Send email notification via SMTP.
+
+        Requires channel config: {
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 587,
+            "smtp_user": "user@example.com",
+            "smtp_password": "password",
+            "from_addr": "alerts@lakebase-ops.com",
+            "to_addrs": ["team@example.com"]
+        }
+        """
+        config = self._channel_configs.get("email", {})
+        smtp_host = config.get("smtp_host", "")
+        if not smtp_host:
+            logger.warning("Email smtp_host not configured; skipping email alert")
+            return
+
+        smtp_port = config.get("smtp_port", 587)
+        smtp_user = config.get("smtp_user", "")
+        smtp_password = config.get("smtp_password", "")
+        from_addr = config.get("from_addr", smtp_user)
+        to_addrs = config.get("to_addrs", [])
+        if not to_addrs:
+            logger.warning("Email to_addrs not configured; skipping email alert")
+            return
+
+        subject = f"[LakebaseOps {alert.severity.value.upper()}] {alert.title}"
+        body = (
+            f"Alert: {alert.title}\n"
+            f"Severity: {alert.severity.value}\n"
+            f"Message: {alert.message}\n\n"
+            f"Project: {alert.project_id}\n"
+            f"Branch: {alert.branch_id}\n"
+            f"Agent: {alert.source_agent}\n"
+            f"Metric: {alert.metric_name} = {alert.metric_value} (threshold: {alert.threshold})\n"
+            f"SOP Action: {alert.sop_action}\n"
+            f"Timestamp: {alert.timestamp.isoformat()}\n"
+        )
+
+        msg = MIMEMultipart()
+        msg["From"] = from_addr
+        msg["To"] = ", ".join(to_addrs)
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain"))
+
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+                server.ehlo()
+                if smtp_port != 25:
+                    server.starttls()
+                if smtp_user and smtp_password:
+                    server.login(smtp_user, smtp_password)
+                server.sendmail(from_addr, to_addrs, msg.as_string())
+            logger.info(f"Email sent: {alert.title} -> {to_addrs}")
+        except Exception as exc:
+            logger.error(f"Email alert failed for '{alert.title}': {exc}")
 
     def get_alert_history(self, severity: Optional[AlertSeverity] = None) -> list[Alert]:
         """Get alert history, optionally filtered by severity."""

@@ -1,12 +1,13 @@
 """Health check router."""
 
 from fastapi import APIRouter
+from ..models.health import HealthResponse
 from ..services.sql_service import execute_query
 
 router = APIRouter(prefix="/api", tags=["health"])
 
 
-@router.get("/health", operation_id="health_check")
+@router.get("/health", operation_id="health_check", response_model=HealthResponse)
 def health_check():
     """Basic health check — verifies SQL warehouse connectivity."""
     try:

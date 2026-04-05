@@ -12,7 +12,7 @@ os.environ.setdefault("OPS_SCHEMA", "lakebase_ops")
 
 # COMMAND ----------
 
-from agents.health_agent import HealthAgent
+from agents.health import HealthAgent
 
 agent = HealthAgent()
 

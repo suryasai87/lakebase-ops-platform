@@ -171,6 +171,42 @@ JOB_DEFINITIONS = {
         "timeout_seconds": 600,
         "tags": {"team": "lakebase-ops", "component": "cost-tracker"},
     },
+
+    "nightly_branch_reset": {
+        "name": "LakebaseOps - Nightly Branch Reset",
+        "description": "Resets staging/development branches from parent nightly (GAP-043)",
+        "schedule": {"quartz_cron_expression": "0 0 2 * * ?", "timezone_id": "UTC"},
+        "tasks": [
+            {
+                "task_key": "reset_staging",
+                "notebook_task": {
+                    "notebook_path": "/Repos/lakebase-ops/jobs/branch_reset_notebook",
+                    "base_parameters": {
+                        "project_id": "{{job.parameters.project_id}}",
+                        "branches": "staging",
+                        "dry_run": "false",
+                    },
+                },
+                "job_cluster_key": "lakebase_ops_cluster",
+            },
+            {
+                "task_key": "reset_development",
+                "notebook_task": {
+                    "notebook_path": "/Repos/lakebase-ops/jobs/branch_reset_notebook",
+                    "base_parameters": {
+                        "project_id": "{{job.parameters.project_id}}",
+                        "branches": "development",
+                        "dry_run": "false",
+                    },
+                },
+                "job_cluster_key": "lakebase_ops_cluster",
+                "depends_on": [{"task_key": "reset_staging"}],
+            },
+        ],
+        "max_concurrent_runs": 1,
+        "timeout_seconds": 600,
+        "tags": {"team": "lakebase-ops", "component": "nightly-branch-reset"},
+    },
 }
 
 
@@ -247,6 +283,21 @@ resources:
             notebook_path: ./jobs/branch_manager_notebook.py
           depends_on:
             - task_key: enforce_ttl
+
+    nightly_branch_reset:
+      name: "LakebaseOps - Nightly Branch Reset"
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"
+        timezone_id: UTC
+      tasks:
+        - task_key: reset_staging
+          notebook_task:
+            notebook_path: ./jobs/branch_reset_notebook.py
+        - task_key: reset_development
+          notebook_task:
+            notebook_path: ./jobs/branch_reset_notebook.py
+          depends_on:
+            - task_key: reset_staging
 
     cold_archiver:
       name: "LakebaseOps - Cold Data Archiver"

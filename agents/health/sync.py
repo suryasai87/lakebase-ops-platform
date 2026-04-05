@@ -89,6 +89,37 @@ class SyncMixin:
 
         return validation_record
 
+    def get_synced_table_api_status(self, source_table: str) -> dict:
+        """
+        Check official sync status via the Synced Tables API.
+        GAP-036: Uses GET /api/2.0/postgres/synced_tables/{table_name}.
+
+        Args:
+            source_table: Table name to check sync status for.
+
+        Returns:
+            Official sync status from the Databricks API.
+        """
+        try:
+            status = self.client.get_synced_table_status(source_table)
+            return {
+                "source_table": source_table,
+                "api_status": status.get("status", "UNKNOWN"),
+                "last_sync_time": status.get("last_sync_time", ""),
+                "source_row_count": status.get("source_row_count", 0),
+                "target_row_count": status.get("target_row_count", 0),
+                "lag_seconds": status.get("lag_seconds", 0),
+                "available": True,
+            }
+        except Exception as e:
+            logger.warning(f"Synced Tables API unavailable for {source_table}: {e}")
+            return {
+                "source_table": source_table,
+                "api_status": "UNAVAILABLE",
+                "available": False,
+                "error": str(e),
+            }
+
     def validate_sync_integrity(self, project_id: str, branch_id: str,
                                  source_table: str, target_delta_table: str,
                                  key_columns: list[str] = None) -> dict:
@@ -127,11 +158,14 @@ class SyncMixin:
                 project_id, branch_id,
                 pair["source"], pair["target"],
             )
+            # GAP-036: Also check via Synced Tables API
+            api_status = self.get_synced_table_api_status(pair["source"])
             results.append({
                 "source": pair["source"],
                 "target": pair["target"],
                 "completeness": completeness,
                 "integrity": integrity,
+                "api_status": api_status,
             })
 
         healthy = sum(1 for r in results if r["completeness"]["status"] == "healthy")

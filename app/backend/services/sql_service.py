@@ -26,13 +26,35 @@ def get_client():
     return _client
 
 
-def execute_query(sql: str) -> list[dict]:
-    """Execute SQL via Statement Execution API, return rows as dicts."""
+def execute_query(sql: str, parameters: list[dict] | None = None) -> list[dict]:
+    """Execute SQL via Statement Execution API, return rows as dicts.
+
+    Args:
+        sql: SQL statement. Use :param_name for named parameter placeholders.
+        parameters: Optional list of parameter dicts, each with keys
+            ``name``, ``value``, and ``type`` (e.g. ``"STRING"``, ``"INT"``).
+            When provided, the Statement Execution API binds them safely,
+            preventing SQL injection.
+
+    Returns:
+        List of row dicts keyed by column name.
+    """
     try:
+        from databricks.sdk.service.sql import StatementParameterListItem
+
         client = get_client()
+        sdk_params = None
+        if parameters:
+            sdk_params = [
+                StatementParameterListItem(
+                    name=p["name"], value=str(p["value"]), type=p.get("type")
+                )
+                for p in parameters
+            ]
         result = client.statement_execution.execute_statement(
             warehouse_id=WAREHOUSE_ID,
             statement=sql,
+            parameters=sdk_params,
             wait_timeout="50s",
         )
         state = result.status.state.value if result.status and result.status.state else "UNKNOWN"

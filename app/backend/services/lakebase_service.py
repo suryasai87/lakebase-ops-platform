@@ -66,33 +66,27 @@ def _get_db_credential() -> tuple:
         except Exception as e:
             logger.warning(f"Provisioned credentials API failed: {e}")
 
-    # Method 4: Extract SP's own OAuth token from SDK headers
+    # Method 4: Generate credential via public SDK postgres API
+    # (Replaces private attribute access — uses only public SDK methods)
     try:
         from databricks.sdk import WorkspaceClient
         client = WorkspaceClient()
-        token = None
-        try:
-            token = client.config.token
-        except Exception:
-            pass
-        if not token:
-            try:
-                headers = client.api_client.default_headers
-                auth = headers.get("Authorization", "")
-                if auth.startswith("Bearer "):
-                    token = auth[7:]
-            except Exception:
-                pass
+        cred = client.postgres.generate_database_credential()
+        token = getattr(cred, "password", "") or getattr(cred, "token", "")
+        user = getattr(cred, "username", "databricks") or "databricks"
         if token:
-            sp_id = os.getenv("DATABRICKS_CLIENT_ID", "")
-            user = sp_id if sp_id else "databricks"
-            logger.info(f"Using SP OAuth token for Lakebase auth (user={user})")
+            logger.info("Credential obtained via public SDK postgres.generate_database_credential()")
             _credential_cache.update({"token": token, "user": user, "timestamp": now})
             return token, user
         else:
-            logger.warning("SP OAuth token: all extraction methods returned empty")
+            logger.warning("Public SDK postgres credential returned empty token")
+    except AttributeError:
+        logger.warning(
+            "SDK does not have postgres.generate_database_credential() — "
+            "upgrade databricks-sdk to >= 0.81.0"
+        )
     except Exception as e:
-        logger.warning(f"SP OAuth token extraction failed: {e}")
+        logger.warning(f"Public SDK postgres credential failed: {e}")
 
     return "", "databricks"
 

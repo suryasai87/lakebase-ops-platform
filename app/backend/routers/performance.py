@@ -1,17 +1,22 @@
 """Performance router — slow queries and regression detection."""
 
+from typing import List
 from fastapi import APIRouter, Query
+from ..models.performance import SlowQuery, RegressionEntry
 from ..services.sql_service import execute_query, fqn, get_cached
 
 router = APIRouter(prefix="/api/performance", tags=["performance"])
 
 
-@router.get("/queries", operation_id="slow_queries")
+@router.get("/queries", operation_id="slow_queries", response_model=List[SlowQuery])
 def slow_queries(
     hours: int = Query(24, ge=1, le=168),
     limit: int = Query(10, ge=1, le=50),
 ):
     """Top N slowest queries over the given window."""
+    safe_hours = int(hours)
+    safe_limit = int(limit)
+
     def fetch():
         sql = f"""
         SELECT query, queryid,
@@ -22,16 +27,19 @@ def slow_queries(
                ROUND(SUM(shared_blks_read) * 8.0 / 1024, 2) AS total_read_mb,
                MAX(snapshot_timestamp) AS last_seen
         FROM {fqn('pg_stat_history')}
-        WHERE snapshot_timestamp > CURRENT_TIMESTAMP - INTERVAL {hours} HOURS
+        WHERE snapshot_timestamp > CURRENT_TIMESTAMP - INTERVAL :hours HOURS
         GROUP BY query, queryid
         ORDER BY total_time_ms DESC
-        LIMIT {limit}
+        LIMIT :row_limit
         """
-        return execute_query(sql)
-    return get_cached(f"slow_queries_{hours}_{limit}", fetch, ttl=60)
+        return execute_query(sql, parameters=[
+            {"name": "hours", "value": safe_hours, "type": "INT"},
+            {"name": "row_limit", "value": safe_limit, "type": "INT"},
+        ])
+    return get_cached(f"slow_queries_{safe_hours}_{safe_limit}", fetch, ttl=60)
 
 
-@router.get("/regressions", operation_id="performance_regressions")
+@router.get("/regressions", operation_id="performance_regressions", response_model=List[RegressionEntry])
 def regressions():
     """Detect query performance regressions (last 2h vs previous day)."""
     def fetch():

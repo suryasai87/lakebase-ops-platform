@@ -1,0 +1,172 @@
+# Sensitive Data Inventory — PII / PHI / PCI column definitions
+#
+# This file catalogs columns that contain sensitive data and maps them to
+# the appropriate Unity Catalog masking functions.  The governance agent
+# (agents/provisioning/governance.py) and the masking compliance job
+# (jobs/masking_compliance_job.py) reference this inventory to verify that
+# masking policies are applied consistently across Lakebase branches.
+#
+# Classification levels:
+#   PII  — Personally Identifiable Information (GDPR, CCPA)
+#   PHI  — Protected Health Information (HIPAA)
+#   PCI  — Payment Card Industry sensitive data (PCI-DSS)
+
+---
+
+classifications:
+  PII:
+    description: "Personally Identifiable Information"
+    regulations:
+      - GDPR
+      - CCPA
+    columns:
+      - name: email
+        tables: ["*"]
+        masking_function: mask_email
+        description: "User email addresses"
+      - name: phone_number
+        tables: ["*"]
+        masking_function: mask_phone
+        description: "Phone numbers in any format"
+      - name: full_name
+        tables: ["*"]
+        masking_function: mask_name
+        description: "Full legal name"
+      - name: first_name
+        tables: ["*"]
+        masking_function: mask_name
+        description: "First / given name"
+      - name: last_name
+        tables: ["*"]
+        masking_function: mask_name
+        description: "Last / family name"
+      - name: ssn
+        tables: ["*"]
+        masking_function: mask_ssn
+        description: "Social Security Number"
+      - name: date_of_birth
+        tables: ["*"]
+        masking_function: mask_dob
+        description: "Date of birth"
+      - name: address
+        tables: ["*"]
+        masking_function: mask_address
+        description: "Street address"
+      - name: ip_address
+        tables: ["*"]
+        masking_function: mask_ip
+        description: "IP addresses (v4 and v6)"
+
+  PHI:
+    description: "Protected Health Information"
+    regulations:
+      - HIPAA
+    columns:
+      - name: patient_id
+        tables: ["*"]
+        masking_function: mask_patient_id
+        description: "Patient identifier"
+      - name: mrn
+        tables: ["*"]
+        masking_function: mask_mrn
+        description: "Medical Record Number"
+      - name: diagnosis_code
+        tables: ["*"]
+        masking_function: mask_diagnosis
+        description: "ICD-10 or similar diagnosis codes"
+      - name: treatment_notes
+        tables: ["*"]
+        masking_function: mask_freetext
+        description: "Free-text clinical notes"
+      - name: prescription
+        tables: ["*"]
+        masking_function: mask_freetext
+        description: "Prescription details"
+      - name: lab_results
+        tables: ["*"]
+        masking_function: mask_freetext
+        description: "Laboratory test results"
+      - name: insurance_id
+        tables: ["*"]
+        masking_function: mask_insurance
+        description: "Health insurance member ID"
+
+  PCI:
+    description: "Payment Card Industry data"
+    regulations:
+      - PCI-DSS
+    columns:
+      - name: card_number
+        tables: ["*"]
+        masking_function: mask_card_number
+        description: "Credit/debit card number (PAN)"
+      - name: cvv
+        tables: ["*"]
+        masking_function: mask_redact
+        description: "Card verification value — must never be stored"
+      - name: card_expiry
+        tables: ["*"]
+        masking_function: mask_card_expiry
+        description: "Card expiration date"
+      - name: bank_account
+        tables: ["*"]
+        masking_function: mask_bank_account
+        description: "Bank account number"
+      - name: routing_number
+        tables: ["*"]
+        masking_function: mask_routing
+        description: "Bank routing / sort code"
+
+# UC masking function definitions (CREATE FUNCTION templates)
+masking_functions:
+  mask_email:
+    sql: "CONCAT(LEFT(val, 1), '***@', SPLIT_PART(val, '@', 2))"
+    description: "Show first char and domain only"
+  mask_phone:
+    sql: "CONCAT('***-***-', RIGHT(val, 4))"
+    description: "Show last 4 digits only"
+  mask_name:
+    sql: "CONCAT(LEFT(val, 1), REPEAT('*', LENGTH(val) - 1))"
+    description: "Show first initial only"
+  mask_ssn:
+    sql: "CONCAT('***-**-', RIGHT(val, 4))"
+    description: "Show last 4 digits only"
+  mask_dob:
+    sql: "DATE_TRUNC('year', val)"
+    description: "Truncate to year only"
+  mask_address:
+    sql: "'[REDACTED]'"
+    description: "Fully redacted"
+  mask_ip:
+    sql: "REGEXP_REPLACE(val, '\\d+\\.\\d+$', '*.*')"
+    description: "Mask last two octets"
+  mask_patient_id:
+    sql: "CONCAT('PAT-', RIGHT(val, 4))"
+    description: "Show last 4 chars only"
+  mask_mrn:
+    sql: "CONCAT('MRN-', RIGHT(val, 4))"
+    description: "Show last 4 chars only"
+  mask_diagnosis:
+    sql: "LEFT(val, 3)"
+    description: "Show ICD category only (first 3 chars)"
+  mask_freetext:
+    sql: "'[REDACTED]'"
+    description: "Fully redacted"
+  mask_insurance:
+    sql: "CONCAT('***', RIGHT(val, 4))"
+    description: "Show last 4 chars only"
+  mask_card_number:
+    sql: "CONCAT('****-****-****-', RIGHT(val, 4))"
+    description: "Show last 4 digits only (PCI compliant)"
+  mask_redact:
+    sql: "'***'"
+    description: "Fully redacted — CVV must never be exposed"
+  mask_card_expiry:
+    sql: "'**/**'"
+    description: "Fully redacted"
+  mask_bank_account:
+    sql: "CONCAT('****', RIGHT(val, 4))"
+    description: "Show last 4 digits only"
+  mask_routing:
+    sql: "'*********'"
+    description: "Fully redacted"

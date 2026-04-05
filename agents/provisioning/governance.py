@@ -103,6 +103,115 @@ class GovernanceMixin:
 
         return agent_config
 
+    def validate_branch_masking(self, project_id: str, branch_id: str,
+                                parent_branch_id: str = "main") -> dict:
+        """
+        Validate that UC masking policies from the parent branch propagate
+        to a child branch.
+
+        Compares masking functions applied on the parent vs the given branch
+        and reports any gaps. Uses information_schema to enumerate masking
+        functions and their column bindings.
+
+        Args:
+            project_id: Lakebase project identifier.
+            branch_id: Target branch to validate.
+            parent_branch_id: Branch to compare against (default ``main``).
+
+        Returns:
+            Dict with ``compliant`` bool, lists of ``missing_policies`` and
+            ``extra_policies``, and ``details`` of what was compared.
+        """
+        # Query masking functions on both branches
+        masking_query = (
+            "SELECT column_name, masking_function_name "
+            "FROM information_schema.column_masking_policies "
+            "ORDER BY column_name"
+        )
+
+        parent_policies = self.client.execute_statement(
+            project_id, parent_branch_id, masking_query
+        )
+        branch_policies = self.client.execute_statement(
+            project_id, branch_id, masking_query
+        )
+
+        # Build sets of (column, function) tuples for comparison
+        parent_set = {
+            (r.get("column_name"), r.get("masking_function_name"))
+            for r in (parent_policies or [])
+        }
+        branch_set = {
+            (r.get("column_name"), r.get("masking_function_name"))
+            for r in (branch_policies or [])
+        }
+
+        missing = parent_set - branch_set
+        extra = branch_set - parent_set
+        compliant = len(missing) == 0
+
+        result = {
+            "project_id": project_id,
+            "branch_id": branch_id,
+            "parent_branch_id": parent_branch_id,
+            "compliant": compliant,
+            "parent_policy_count": len(parent_set),
+            "branch_policy_count": len(branch_set),
+            "missing_policies": [
+                {"column": col, "function": fn} for col, fn in sorted(missing)
+            ],
+            "extra_policies": [
+                {"column": col, "function": fn} for col, fn in sorted(extra)
+            ],
+        }
+
+        if not compliant:
+            logger.warning(
+                f"Masking compliance FAILED for branch {branch_id}: "
+                f"{len(missing)} missing policies"
+            )
+        else:
+            logger.info(
+                f"Masking compliance OK for branch {branch_id}: "
+                f"{len(parent_set)} policies verified"
+            )
+
+        return result
+
+    def register_lakebase_catalog(self, project_id: str, branch_id: str,
+                                   catalog_name: str | None = None) -> dict:
+        """
+        Register a Lakebase database as a Unity Catalog catalog.
+        GAP-034: Uses POST /api/2.0/postgres/catalogs for federated queries.
+
+        Args:
+            project_id: Lakebase project identifier.
+            branch_id: Branch containing the database to register.
+            catalog_name: UC catalog name. Defaults to project_id with
+                underscores replacing hyphens.
+
+        Returns:
+            Registration result with catalog_id and status.
+        """
+        if catalog_name is None:
+            catalog_name = project_id.replace("-", "_")
+
+        result = self.client.register_catalog(project_id, branch_id, catalog_name)
+
+        logger.info(
+            f"Registered Lakebase catalog: {catalog_name} "
+            f"(project={project_id}, branch={branch_id}, "
+            f"status={result.get('status', 'unknown')})"
+        )
+
+        return {
+            "project_id": project_id,
+            "branch_id": branch_id,
+            "catalog_name": catalog_name,
+            "catalog_id": result.get("catalog_id", ""),
+            "status": result.get("status", "unknown"),
+        }
+
     def provision_with_governance(self, project_name: str, domain: str,
                                   environment: str = "production",
                                   branching_pattern: str = "multi_env_pipeline",

@@ -191,6 +191,38 @@ IDLE_CONNECTIONS = """
 # FR-08: Schema Diff (ProvisioningAgent) — Native PG Catalogs
 # =============================================================================
 
+# =============================================================================
+# GAP-032: Lakehouse Sync CDC Monitoring
+# =============================================================================
+
+LAKEHOUSE_SYNC_REPLICATION_LAG = """
+    SELECT client_addr, state, sent_lsn, write_lsn, flush_lsn, replay_lsn,
+           pg_wal_lsn_diff(sent_lsn, replay_lsn) AS sent_lag_bytes,
+           EXTRACT(EPOCH FROM replay_lag) AS replay_lag_seconds,
+           EXTRACT(EPOCH FROM write_lag) AS write_lag_seconds,
+           EXTRACT(EPOCH FROM flush_lag) AS flush_lag_seconds
+    FROM pg_stat_replication
+    ORDER BY replay_lag DESC NULLS LAST
+"""
+
+LAKEHOUSE_SYNC_SLOT_STATUS = """
+    SELECT slot_name, plugin, slot_type, active,
+           pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) AS retained_bytes,
+           pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) AS pending_bytes
+    FROM pg_replication_slots
+    ORDER BY pending_bytes DESC NULLS LAST
+"""
+
+LAKEHOUSE_SYNC_WAL_SENDERS = """
+    SELECT pid, state, sent_lsn, write_lsn, flush_lsn, replay_lsn,
+           sync_state, reply_time
+    FROM pg_stat_wal_receiver
+"""
+
+# =============================================================================
+# FR-08: Schema Diff (ProvisioningAgent) — Native PG Catalogs
+# =============================================================================
+
 SCHEMA_COLUMNS = """
     SELECT c.relname AS table_name, a.attname AS column_name,
            pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,

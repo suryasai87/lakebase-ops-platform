@@ -11,9 +11,23 @@ env:
     value: "${OPS_CATALOG}"
   - name: OPS_SCHEMA
     value: "${OPS_SCHEMA}"
+  - name: ARCHIVE_SCHEMA
+    value: "${ARCHIVE_SCHEMA}"
   - name: SQL_WAREHOUSE_ID
     value: "${SQL_WAREHOUSE_ID}"
   - name: LAKEBASE_PROJECT_ID
     value: "${LAKEBASE_PROJECT_ID}"
+  - name: LAKEBASE_PROJECT_NAME
+    value: "${LAKEBASE_PROJECT_NAME}"
   - name: LAKEBASE_ENDPOINT_HOST
     value: "${LAKEBASE_ENDPOINT_HOST}"
+  - name: LAKEBASE_ENDPOINT_NAME
+    value: "${LAKEBASE_ENDPOINT_NAME}"
+  - name: LAKEBASE_DEFAULT_BRANCH
+    value: "production"
+  - name: LAKEBASE_DB_NAME
+    value: "databricks_postgres"
+  - name: LAKEBASE_JOB_IDS
+    value: "${LAKEBASE_JOB_IDS}"
+  - name: CORS_ORIGINS
+    value: "https://*.databricksapps.com"

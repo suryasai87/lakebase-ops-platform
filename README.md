@@ -334,9 +334,23 @@ lakebase-ops-platform/
 ├── dashboards/
 │   └── lakebase_ops_dashboard.sql       # 8 AI/BI dashboard query sets
 |
-└── github_actions/
-    ├── create_branch_on_pr.yml          # Auto-create branch on PR open
-    └── delete_branch_on_pr_close.yml    # Auto-delete + replay migrations
+├── templates/github-actions/
+│   ├── create_branch_on_pr.yml          # Auto-create branch on PR open
+│   └── delete_branch_on_pr_close.yml    # Auto-delete + replay migrations
+|
+├── cicd_templates/
+│   ├── Jenkinsfile                      # Jenkins branch-per-PR pipeline
+│   ├── .gitlab-ci.yml                   # GitLab CI branch-per-PR pipeline
+│   ├── azure-pipelines.yml              # Azure DevOps branch-per-PR pipeline
+│   ├── .circleci/config.yml             # CircleCI branch-per-PR pipeline
+│   └── post_schema_diff.py              # Schema diff PR comment script
+|
+├── .github/workflows/
+│   └── ci.yml                           # Active CI pipeline (pytest, vitest, ruff, mypy)
+|
+└── github_actions/                      # (Legacy) Original templates — see templates/
+    ├── create_branch_on_pr.yml
+    └── delete_branch_on_pr_close.yml
 ```
 
 ---

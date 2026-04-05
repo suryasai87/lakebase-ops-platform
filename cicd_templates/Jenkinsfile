@@ -1,0 +1,153 @@
+// =============================================================================
+// Lakebase Branch-per-PR Pipeline for Jenkins
+//
+// Demonstrates the branch-per-PR Lakebase workflow:
+//   1. Create ephemeral Lakebase branch from staging
+//   2. Wait for branch to become ACTIVE
+//   3. Apply database migrations
+//   4. Run integration tests against ephemeral branch
+//   5. Generate schema diff and post to PR
+//   6. Clean up branch on completion
+//
+// Requirements:
+//   - Databricks CLI v0.278+ installed on Jenkins agent
+//   - Credentials: DATABRICKS_HOST, DATABRICKS_TOKEN in Jenkins credentials store
+//   - Environment variable: LAKEBASE_PROJECT
+//
+// Usage:
+//   Configure a Multibranch Pipeline pointing to your repo.
+//   Jenkins will auto-discover branches and run this Jenkinsfile.
+// =============================================================================
+
+pipeline {
+    agent any
+
+    environment {
+        DATABRICKS_HOST  = credentials('databricks-host')
+        DATABRICKS_TOKEN = credentials('databricks-token')
+        LAKEBASE_PROJECT = "${env.LAKEBASE_PROJECT ?: 'my-lakebase-project'}"
+        BRANCH_NAME      = "ci-pr-${env.CHANGE_ID ?: env.BUILD_NUMBER}"
+    }
+
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage('Install Databricks CLI') {
+            steps {
+                sh '''
+                    curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+                    databricks --version
+                '''
+            }
+        }
+
+        stage('Create Lakebase Branch') {
+            when {
+                changeRequest()
+            }
+            steps {
+                sh '''
+                    echo "Creating Lakebase branch: ${BRANCH_NAME}"
+                    databricks postgres create-branch \
+                        "projects/${LAKEBASE_PROJECT}" \
+                        "${BRANCH_NAME}" \
+                        --json '{
+                            "spec": {
+                                "source_branch": "projects/'"${LAKEBASE_PROJECT}"'/branches/staging",
+                                "ttl": "14400s"
+                            }
+                        }'
+                '''
+            }
+        }
+
+        stage('Wait for Branch Active') {
+            when {
+                changeRequest()
+            }
+            steps {
+                sh '''
+                    for i in $(seq 1 30); do
+                        STATUS=$(databricks postgres get-branch \
+                            "projects/${LAKEBASE_PROJECT}/branches/${BRANCH_NAME}" \
+                            --output json | jq -r '.status.state')
+                        echo "Attempt $i: Status=$STATUS"
+                        if [ "$STATUS" = "ACTIVE" ]; then
+                            echo "Branch is active!"
+                            exit 0
+                        fi
+                        sleep 10
+                    done
+                    echo "ERROR: Branch did not become active within timeout"
+                    exit 1
+                '''
+            }
+        }
+
+        stage('Apply Migrations') {
+            when {
+                changeRequest()
+            }
+            steps {
+                sh '''
+                    echo "Applying migrations to branch: ${BRANCH_NAME}"
+                    # Replace with your migration tool:
+                    # flyway migrate -url=jdbc:postgresql://${BRANCH_ENDPOINT}:5432/databricks_postgres
+                '''
+            }
+        }
+
+        stage('Run Tests') {
+            when {
+                changeRequest()
+            }
+            steps {
+                sh '''
+                    echo "Running integration tests against ephemeral branch..."
+                    # pip install -r requirements.txt
+                    # pytest tests/ -v --branch=${BRANCH_NAME}
+                '''
+            }
+        }
+
+        stage('Generate Schema Diff') {
+            when {
+                changeRequest()
+            }
+            steps {
+                sh '''
+                    echo "Generating schema diff between staging and ${BRANCH_NAME}..."
+                    # python cicd_templates/post_schema_diff.py \
+                    #     --project "${LAKEBASE_PROJECT}" \
+                    #     --source-branch staging \
+                    #     --target-branch "${BRANCH_NAME}" \
+                    #     --pr-number "${CHANGE_ID}" \
+                    #     --repo-owner "${GIT_ORG}" \
+                    #     --repo-name "${GIT_REPO}"
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                if (env.CHANGE_ID) {
+                    sh '''
+                        echo "Cleaning up Lakebase branch: ${BRANCH_NAME}"
+                        databricks postgres delete-branch \
+                            "projects/${LAKEBASE_PROJECT}/branches/${BRANCH_NAME}" \
+                            || true
+                    '''
+                }
+            }
+        }
+        failure {
+            echo "Pipeline failed. Branch ${BRANCH_NAME} cleanup attempted in post-always."
+        }
+    }
+}
