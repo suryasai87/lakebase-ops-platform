@@ -30,7 +30,7 @@ from config.migration_profiles import (
 
 # Lakebase constraints
 LAKEBASE_MAX_STORAGE_AUTOSCALING_GB = 8 * 1024  # 8 TB
-LAKEBASE_MAX_STORAGE_PROVISIONED_GB = 2 * 1024   # 2 TB
+LAKEBASE_MAX_STORAGE_PROVISIONED_GB = 2 * 1024  # 2 TB
 LAKEBASE_MAX_CONNECTIONS = 4000
 LAKEBASE_MAX_QPS = 100_000
 LAKEBASE_MAX_SUSTAINED_TPS = 5000
@@ -38,15 +38,50 @@ LAKEBASE_MAX_CU_AUTOSCALING = 32
 LAKEBASE_MAX_CU_PROVISIONED = 112
 
 LAKEBASE_SUPPORTED_EXTENSIONS = {
-    "pg_stat_statements", "pgvector", "postgis", "pg_trgm", "pgcrypto",
-    "pg_hint_plan", "pg_prewarm", "uuid-ossp", "hstore", "citext", "ltree",
-    "intarray", "tablefunc", "earthdistance", "cube", "fuzzystrmatch",
-    "unaccent", "btree_gin", "btree_gist", "pg_graphql", "pg_jsonschema",
-    "databricks_auth", "vector", "postgis_topology", "postgis_raster",
-    "address_standardizer", "pg_visibility", "pgrowlocks", "pg_buffercache",
-    "sslinfo", "xml2", "dict_int", "dict_xsyn", "pg_surgery", "bool_plperl",
-    "jsonb_plperl", "hstore_plperl", "seg", "isn", "lo", "tcn",
-    "tsm_system_rows", "tsm_system_time", "bloom",
+    "pg_stat_statements",
+    "pgvector",
+    "postgis",
+    "pg_trgm",
+    "pgcrypto",
+    "pg_hint_plan",
+    "pg_prewarm",
+    "uuid-ossp",
+    "hstore",
+    "citext",
+    "ltree",
+    "intarray",
+    "tablefunc",
+    "earthdistance",
+    "cube",
+    "fuzzystrmatch",
+    "unaccent",
+    "btree_gin",
+    "btree_gist",
+    "pg_graphql",
+    "pg_jsonschema",
+    "databricks_auth",
+    "vector",
+    "postgis_topology",
+    "postgis_raster",
+    "address_standardizer",
+    "pg_visibility",
+    "pgrowlocks",
+    "pg_buffercache",
+    "sslinfo",
+    "xml2",
+    "dict_int",
+    "dict_xsyn",
+    "pg_surgery",
+    "bool_plperl",
+    "jsonb_plperl",
+    "hstore_plperl",
+    "seg",
+    "isn",
+    "lo",
+    "tcn",
+    "tsm_system_rows",
+    "tsm_system_time",
+    "bloom",
 }
 
 EXTENSION_WORKAROUNDS = {
@@ -128,14 +163,16 @@ def compute_readiness_score(
     # ── Dimension 1: Storage (weight 0.20) ──────────────────────────────
 
     storage_score, storage_blockers, storage_details = _score_storage(db_profile)
-    dimensions.append(DimensionScore(
-        dimension="storage",
-        score=storage_score,
-        max_score=100,
-        weight=0.20,
-        details=storage_details,
-        blockers=storage_blockers,
-    ))
+    dimensions.append(
+        DimensionScore(
+            dimension="storage",
+            score=storage_score,
+            max_score=100,
+            weight=0.20,
+            details=storage_details,
+            blockers=storage_blockers,
+        )
+    )
     all_blockers.extend(storage_blockers)
 
     # ── Dimension 2: Extensions (weight 0.20) ───────────────────────────
@@ -144,14 +181,16 @@ def compute_readiness_score(
         ext_score, ext_blockers, ext_warnings, sup, unsup = _score_dynamodb_features(db_profile)
     else:
         ext_score, ext_blockers, ext_warnings, sup, unsup = _score_extensions(db_profile)
-    dimensions.append(DimensionScore(
-        dimension="extensions",
-        score=ext_score,
-        max_score=100,
-        weight=0.20,
-        details=f"{len(sup)} supported, {len(unsup)} unsupported",
-        blockers=ext_blockers,
-    ))
+    dimensions.append(
+        DimensionScore(
+            dimension="extensions",
+            score=ext_score,
+            max_score=100,
+            weight=0.20,
+            details=f"{len(sup)} supported, {len(unsup)} unsupported",
+            blockers=ext_blockers,
+        )
+    )
     all_blockers.extend(ext_blockers)
     all_warnings.extend(ext_warnings)
     supported_exts = sup
@@ -160,30 +199,36 @@ def compute_readiness_score(
     # ── Dimension 3: Performance Fit (weight 0.15) ──────────────────────
 
     perf_score, perf_blockers, perf_details = _score_performance(workload)
-    dimensions.append(DimensionScore(
-        dimension="performance",
-        score=perf_score,
-        max_score=100,
-        weight=0.15,
-        details=perf_details,
-        blockers=perf_blockers,
-    ))
+    dimensions.append(
+        DimensionScore(
+            dimension="performance",
+            score=perf_score,
+            max_score=100,
+            weight=0.15,
+            details=perf_details,
+            blockers=perf_blockers,
+        )
+    )
     all_blockers.extend(perf_blockers)
 
     # ── Dimension 4: Schema Complexity (weight 0.15) ────────────────────
 
     if is_nosql:
-        complexity_score, complexity_blockers, complexity_warnings, complexity_details = _score_nosql_complexity(db_profile)
+        complexity_score, complexity_blockers, complexity_warnings, complexity_details = _score_nosql_complexity(
+            db_profile
+        )
     else:
         complexity_score, complexity_blockers, complexity_warnings, complexity_details = _score_complexity(db_profile)
-    dimensions.append(DimensionScore(
-        dimension="schema_complexity",
-        score=complexity_score,
-        max_score=100,
-        weight=0.15,
-        details=complexity_details,
-        blockers=complexity_blockers,
-    ))
+    dimensions.append(
+        DimensionScore(
+            dimension="schema_complexity",
+            score=complexity_score,
+            max_score=100,
+            weight=0.15,
+            details=complexity_details,
+            blockers=complexity_blockers,
+        )
+    )
     all_blockers.extend(complexity_blockers)
     all_warnings.extend(complexity_warnings)
 
@@ -193,14 +238,16 @@ def compute_readiness_score(
         repl_score, repl_blockers, repl_details = _score_nosql_replication(db_profile)
     else:
         repl_score, repl_blockers, repl_details = _score_replication(db_profile)
-    dimensions.append(DimensionScore(
-        dimension="replication_ha",
-        score=repl_score,
-        max_score=100,
-        weight=0.15,
-        details=repl_details,
-        blockers=repl_blockers,
-    ))
+    dimensions.append(
+        DimensionScore(
+            dimension="replication_ha",
+            score=repl_score,
+            max_score=100,
+            weight=0.15,
+            details=repl_details,
+            blockers=repl_blockers,
+        )
+    )
     all_blockers.extend(repl_blockers)
 
     # ── Dimension 6: Operational Readiness (weight 0.15) ────────────────
@@ -209,13 +256,15 @@ def compute_readiness_score(
         ops_score, ops_warnings, ops_details = _score_nosql_operational(db_profile, workload)
     else:
         ops_score, ops_warnings, ops_details = _score_operational(db_profile, workload)
-    dimensions.append(DimensionScore(
-        dimension="operational",
-        score=ops_score,
-        max_score=100,
-        weight=0.15,
-        details=ops_details,
-    ))
+    dimensions.append(
+        DimensionScore(
+            dimension="operational",
+            score=ops_score,
+            max_score=100,
+            weight=0.15,
+            details=ops_details,
+        )
+    )
     all_warnings.extend(ops_warnings)
 
     # ── Aggregate ───────────────────────────────────────────────────────
@@ -262,11 +311,13 @@ def _score_storage(db: DatabaseProfile) -> tuple[float, list[Blocker], str]:
     size_gb = db.size_gb
 
     if size_gb > LAKEBASE_MAX_STORAGE_AUTOSCALING_GB:
-        blockers.append(Blocker(
-            category="storage",
-            severity=BlockerSeverity.BLOCKER,
-            description=f"Database size ({size_gb:.1f} GB) exceeds Lakebase max (8 TB)",
-        ))
+        blockers.append(
+            Blocker(
+                category="storage",
+                severity=BlockerSeverity.BLOCKER,
+                description=f"Database size ({size_gb:.1f} GB) exceeds Lakebase max (8 TB)",
+            )
+        )
         return 0, blockers, f"{size_gb:.1f} GB exceeds 8 TB limit"
 
     if size_gb > LAKEBASE_MAX_STORAGE_PROVISIONED_GB:
@@ -294,36 +345,42 @@ def _score_dynamodb_features(db: DatabaseProfile) -> tuple[float, list[Blocker],
             wk = DYNAMODB_FEATURE_WORKAROUNDS.get(feature, "Evaluate manually")
             warnings.append(f"'{feature}' requires workaround: {wk}")
             unsupported.append(feature)
-            blockers.append(Blocker(
-                category="feature_compatibility",
-                severity=BlockerSeverity.MEDIUM,
-                description=f"DynamoDB feature '{feature}' not natively available in Lakebase",
-                workaround=wk,
-                effort_days=2,
-            ))
+            blockers.append(
+                Blocker(
+                    category="feature_compatibility",
+                    severity=BlockerSeverity.MEDIUM,
+                    description=f"DynamoDB feature '{feature}' not natively available in Lakebase",
+                    workaround=wk,
+                    effort_days=2,
+                )
+            )
             score -= 8
         else:
             unsupported.append(feature)
-            blockers.append(Blocker(
-                category="feature_compatibility",
-                severity=BlockerSeverity.HIGH,
-                description=f"DynamoDB feature '{feature}' not supported in Lakebase",
-                workaround=DYNAMODB_FEATURE_WORKAROUNDS.get(feature, "Evaluate manually"),
-                effort_days=3,
-            ))
+            blockers.append(
+                Blocker(
+                    category="feature_compatibility",
+                    severity=BlockerSeverity.HIGH,
+                    description=f"DynamoDB feature '{feature}' not supported in Lakebase",
+                    workaround=DYNAMODB_FEATURE_WORKAROUNDS.get(feature, "Evaluate manually"),
+                    effort_days=3,
+                )
+            )
             score -= 15
 
     if db.streams_enabled:
         score -= 5
     if db.global_table_regions and len(db.global_table_regions) > 1:
         score -= 15
-        blockers.append(Blocker(
-            category="feature_compatibility",
-            severity=BlockerSeverity.HIGH,
-            description=f"Global Tables active in {len(db.global_table_regions)} regions - multi-region not supported in Lakebase",
-            workaround="Consolidate to single-region Lakebase with DR strategy",
-            effort_days=5,
-        ))
+        blockers.append(
+            Blocker(
+                category="feature_compatibility",
+                severity=BlockerSeverity.HIGH,
+                description=f"Global Tables active in {len(db.global_table_regions)} regions - multi-region not supported in Lakebase",
+                workaround="Consolidate to single-region Lakebase with DR strategy",
+                effort_days=5,
+            )
+        )
 
     return max(0, round(score, 1)), blockers, warnings, supported, unsupported
 
@@ -348,7 +405,9 @@ def _score_nosql_complexity(db: DatabaseProfile) -> tuple[float, list[Blocker], 
 
     if db.item_size_avg_bytes and db.item_size_avg_bytes > 100_000:
         score -= 10
-        warnings.append(f"Average item size {db.item_size_avg_bytes:,} bytes - large items may need JSONB + TOAST tuning")
+        warnings.append(
+            f"Average item size {db.item_size_avg_bytes:,} bytes - large items may need JSONB + TOAST tuning"
+        )
 
     # Penalty for NoSQL-to-relational schema redesign overhead (always applies for cross-engine migration)
     score -= 15
@@ -373,23 +432,27 @@ def _score_nosql_replication(db: DatabaseProfile) -> tuple[float, list[Blocker],
     score = 100
 
     if db.streams_enabled:
-        blockers.append(Blocker(
-            category="replication",
-            severity=BlockerSeverity.MEDIUM,
-            description="DynamoDB Streams enabled - downstream consumers need migration to Lakebase CDC or application triggers",
-            workaround="Use Lakeflow Connect or application-level event publishing",
-            effort_days=3,
-        ))
+        blockers.append(
+            Blocker(
+                category="replication",
+                severity=BlockerSeverity.MEDIUM,
+                description="DynamoDB Streams enabled - downstream consumers need migration to Lakebase CDC or application triggers",
+                workaround="Use Lakeflow Connect or application-level event publishing",
+                effort_days=3,
+            )
+        )
         score -= 15
 
     if not db.pitr_enabled:
-        blockers.append(Blocker(
-            category="replication",
-            severity=BlockerSeverity.MEDIUM,
-            description="PITR not enabled - required for zero-impact DynamoDB Export to S3",
-            workaround="Enable PITR before starting migration; required for Export to S3",
-            effort_days=0.5,
-        ))
+        blockers.append(
+            Blocker(
+                category="replication",
+                severity=BlockerSeverity.MEDIUM,
+                description="PITR not enabled - required for zero-impact DynamoDB Export to S3",
+                workaround="Enable PITR before starting migration; required for Export to S3",
+                effort_days=0.5,
+            )
+        )
         score -= 10
 
     regions = db.global_table_regions or []
@@ -454,14 +517,18 @@ def _score_extensions(db: DatabaseProfile) -> tuple[float, list[Blocker], list[s
         else:
             unsupported.append(ext_name)
             workaround = EXTENSION_WORKAROUNDS.get(ext_name, "Evaluate manually")
-            severity = BlockerSeverity.HIGH if ext_name in ("pglogical", "citus", "timescaledb") else BlockerSeverity.MEDIUM
-            blockers.append(Blocker(
-                category="extension",
-                severity=severity,
-                description=f"Extension '{ext_name}' not supported in Lakebase",
-                workaround=workaround,
-                effort_days=2 if severity == BlockerSeverity.HIGH else 1,
-            ))
+            severity = (
+                BlockerSeverity.HIGH if ext_name in ("pglogical", "citus", "timescaledb") else BlockerSeverity.MEDIUM
+            )
+            blockers.append(
+                Blocker(
+                    category="extension",
+                    severity=severity,
+                    description=f"Extension '{ext_name}' not supported in Lakebase",
+                    workaround=workaround,
+                    effort_days=2 if severity == BlockerSeverity.HIGH else 1,
+                )
+            )
             warnings.append(f"Extension '{ext_name}' requires workaround: {workaround}")
 
     total = len(supported) + len(unsupported)
@@ -477,35 +544,43 @@ def _score_performance(workload: WorkloadProfile | None) -> tuple[float, list[Bl
     score = 100
 
     if workload.avg_qps > LAKEBASE_MAX_QPS:
-        blockers.append(Blocker(
-            category="performance",
-            severity=BlockerSeverity.BLOCKER,
-            description=f"QPS ({workload.avg_qps:,.0f}) exceeds Lakebase max ({LAKEBASE_MAX_QPS:,})",
-        ))
+        blockers.append(
+            Blocker(
+                category="performance",
+                severity=BlockerSeverity.BLOCKER,
+                description=f"QPS ({workload.avg_qps:,.0f}) exceeds Lakebase max ({LAKEBASE_MAX_QPS:,})",
+            )
+        )
         score = 0
     elif workload.avg_qps > LAKEBASE_MAX_QPS * 0.7:
         score -= 30
 
     if workload.avg_tps > LAKEBASE_MAX_SUSTAINED_TPS:
-        blockers.append(Blocker(
-            category="performance",
-            severity=BlockerSeverity.HIGH,
-            description=f"Sustained TPS ({workload.avg_tps:,.0f}) exceeds recommended max ({LAKEBASE_MAX_SUSTAINED_TPS:,})",
-            workaround="Consider partitioning workload or keeping high-TPS tables on Aurora",
-        ))
+        blockers.append(
+            Blocker(
+                category="performance",
+                severity=BlockerSeverity.HIGH,
+                description=f"Sustained TPS ({workload.avg_tps:,.0f}) exceeds recommended max ({LAKEBASE_MAX_SUSTAINED_TPS:,})",
+                workaround="Consider partitioning workload or keeping high-TPS tables on Aurora",
+            )
+        )
         score -= 40
 
     if workload.connection_count_peak > LAKEBASE_MAX_CONNECTIONS:
-        blockers.append(Blocker(
-            category="performance",
-            severity=BlockerSeverity.HIGH,
-            description=f"Peak connections ({workload.connection_count_peak}) exceed Lakebase max ({LAKEBASE_MAX_CONNECTIONS})",
-            workaround="Use application-side connection pooling (PgBouncer, HikariCP)",
-            effort_days=2,
-        ))
+        blockers.append(
+            Blocker(
+                category="performance",
+                severity=BlockerSeverity.HIGH,
+                description=f"Peak connections ({workload.connection_count_peak}) exceed Lakebase max ({LAKEBASE_MAX_CONNECTIONS})",
+                workaround="Use application-side connection pooling (PgBouncer, HikariCP)",
+                effort_days=2,
+            )
+        )
         score -= 20
 
-    details = f"QPS: {workload.avg_qps:,.0f}, TPS: {workload.avg_tps:,.0f}, Connections: {workload.connection_count_peak}"
+    details = (
+        f"QPS: {workload.avg_qps:,.0f}, TPS: {workload.avg_tps:,.0f}, Connections: {workload.connection_count_peak}"
+    )
     return max(0, round(score, 1)), blockers, details
 
 
@@ -518,13 +593,15 @@ def _score_complexity(db: DatabaseProfile) -> tuple[float, list[Blocker], list[s
     heavy_plpgsql = len(plpgsql_functions) > 50 or any(f.line_count > 200 for f in plpgsql_functions)
 
     if heavy_plpgsql:
-        blockers.append(Blocker(
-            category="complexity",
-            severity=BlockerSeverity.HIGH,
-            description=f"Heavy PL/pgSQL usage ({len(plpgsql_functions)} functions) - may require significant refactoring",
-            workaround="Evaluate which functions are critical; consider moving logic to application layer",
-            effort_days=10,
-        ))
+        blockers.append(
+            Blocker(
+                category="complexity",
+                severity=BlockerSeverity.HIGH,
+                description=f"Heavy PL/pgSQL usage ({len(plpgsql_functions)} functions) - may require significant refactoring",
+                workaround="Evaluate which functions are critical; consider moving logic to application layer",
+                effort_days=10,
+            )
+        )
         score -= 40
 
     if len(db.triggers) > 20:
@@ -539,13 +616,15 @@ def _score_complexity(db: DatabaseProfile) -> tuple[float, list[Blocker], list[s
         score -= 10
 
     if db.event_trigger_count > 0:
-        blockers.append(Blocker(
-            category="event_triggers",
-            severity=BlockerSeverity.BLOCKER,
-            description=f"{db.event_trigger_count} event trigger(s) detected - not supported on Lakebase",
-            workaround="Remove event triggers; replicate DDL-audit logic via application-layer hooks or Databricks audit logs",
-            effort_days=3,
-        ))
+        blockers.append(
+            Blocker(
+                category="event_triggers",
+                severity=BlockerSeverity.BLOCKER,
+                description=f"{db.event_trigger_count} event trigger(s) detected - not supported on Lakebase",
+                workaround="Remove event triggers; replicate DDL-audit logic via application-layer hooks or Databricks audit logs",
+                effort_days=3,
+            )
+        )
         score -= 30
 
     if db.large_object_count > 0:
@@ -601,27 +680,35 @@ def _score_replication(db: DatabaseProfile) -> tuple[float, list[Blocker], str]:
     score = 100
 
     if db.has_logical_replication:
-        blockers.append(Blocker(
-            category="replication",
-            severity=BlockerSeverity.HIGH,
-            description="Source uses logical replication - Lakebase does not support logical replication as publisher",
-            workaround="Redesign data distribution using Lakeflow Connect, Delta Lake sync, or application-level routing",
-            effort_days=5,
-        ))
+        blockers.append(
+            Blocker(
+                category="replication",
+                severity=BlockerSeverity.HIGH,
+                description="Source uses logical replication - Lakebase does not support logical replication as publisher",
+                workaround="Redesign data distribution using Lakeflow Connect, Delta Lake sync, or application-level routing",
+                effort_days=5,
+            )
+        )
         score -= 40
 
     if db.replication_slots:
         score -= 10
         for slot in db.replication_slots:
-            blockers.append(Blocker(
-                category="replication",
-                severity=BlockerSeverity.MEDIUM,
-                description=f"Replication slot '{slot}' - downstream consumers need alternative data source",
-                workaround="Route consumers to Delta Lake via Synced Tables or Lakeflow Connect",
-                effort_days=2,
-            ))
+            blockers.append(
+                Blocker(
+                    category="replication",
+                    severity=BlockerSeverity.MEDIUM,
+                    description=f"Replication slot '{slot}' - downstream consumers need alternative data source",
+                    workaround="Route consumers to Delta Lake via Synced Tables or Lakeflow Connect",
+                    effort_days=2,
+                )
+            )
 
-    details = "No replication dependencies" if score == 100 else f"Logical replication: {db.has_logical_replication}, Slots: {len(db.replication_slots)}"
+    details = (
+        "No replication dependencies"
+        if score == 100
+        else f"Logical replication: {db.has_logical_replication}, Slots: {len(db.replication_slots)}"
+    )
     return max(0, round(score, 1)), blockers, details
 
 
@@ -642,20 +729,28 @@ def _score_operational(db: DatabaseProfile, workload: WorkloadProfile | None) ->
 
     gcp_extensions = [n for n in ext_names if n.startswith("google_")]
     if gcp_extensions:
-        warnings.append(f"GCP-specific extensions ({', '.join(sorted(gcp_extensions))}) need replacement with Databricks equivalents")
+        warnings.append(
+            f"GCP-specific extensions ({', '.join(sorted(gcp_extensions))}) need replacement with Databricks equivalents"
+        )
         score -= 5 * len(gcp_extensions)
 
     azure_extensions = [n for n in ext_names if n.startswith("azure_")]
     if azure_extensions:
-        warnings.append(f"Azure-specific extensions ({', '.join(sorted(azure_extensions))}) need replacement with Databricks equivalents")
+        warnings.append(
+            f"Azure-specific extensions ({', '.join(sorted(azure_extensions))}) need replacement with Databricks equivalents"
+        )
         score -= 5 * len(azure_extensions)
 
     if "age" in ext_names:
-        warnings.append("Apache AGE graph extension not supported - evaluate GraphFrames or Delta Lake for graph workloads")
+        warnings.append(
+            "Apache AGE graph extension not supported - evaluate GraphFrames or Delta Lake for graph workloads"
+        )
         score -= 5
 
     if "timescaledb" in ext_names:
-        warnings.append("TimescaleDB hypertables must be converted to standard partitioned tables or Delta Lake time-series")
+        warnings.append(
+            "TimescaleDB hypertables must be converted to standard partitioned tables or Delta Lake time-series"
+        )
         score -= 10
 
     if "citus" in ext_names:
@@ -699,10 +794,7 @@ def _recommend_sizing(
 ) -> tuple[LakebaseTier, int, int]:
     size_gb = db.size_gb
 
-    if size_gb > LAKEBASE_MAX_STORAGE_PROVISIONED_GB:
-        tier = LakebaseTier.AUTOSCALING
-    else:
-        tier = LakebaseTier.AUTOSCALING  # Default recommendation
+    tier = LakebaseTier.AUTOSCALING  # Default: autoscaling handles all sizes
 
     if workload and workload.connection_count_peak > 0:
         if workload.connection_count_peak <= 200:

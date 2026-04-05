@@ -1,12 +1,18 @@
 """Health check router."""
 
+import logging
+
 from fastapi import APIRouter
+
+from ..models.health import HealthResponse
 from ..services.sql_service import execute_query
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["health"])
 
 
-@router.get("/health", operation_id="health_check")
+@router.get("/health", operation_id="health_check", response_model=HealthResponse)
 def health_check():
     """Basic health check — verifies SQL warehouse connectivity."""
     try:
@@ -14,5 +20,5 @@ def health_check():
         if rows and rows[0].get("ok") == "1":
             return {"status": "healthy", "sql_warehouse": "connected"}
     except Exception:
-        pass
+        logger.debug("Health check: SQL warehouse unreachable")
     return {"status": "degraded", "sql_warehouse": "unreachable"}

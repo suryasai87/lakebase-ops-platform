@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from framework.agent_framework import EventType
 
@@ -19,17 +19,21 @@ logger = logging.getLogger("lakebase_ops.health")
 class SyncMixin:
     """FR-05: OLTP-to-OLAP sync validation (row count, timestamp, checksum)."""
 
-    def validate_sync_completeness(self, project_id: str, branch_id: str,
-                                    source_table: str, target_delta_table: str,
-                                    timestamp_column: str = "updated_at") -> dict:
+    def validate_sync_completeness(
+        self,
+        project_id: str,
+        branch_id: str,
+        source_table: str,
+        target_delta_table: str,
+        timestamp_column: str = "updated_at",
+    ) -> dict:
         """
         Compare row counts and max timestamps between Lakebase and Delta.
         PRD FR-05: Runs every 15 minutes.
         """
         # Source counts from Lakebase
         src_result = self.client.execute_query(
-            project_id, branch_id,
-            f"SELECT COUNT(*) as count, MAX({timestamp_column}) as max_ts FROM {source_table}"
+            project_id, branch_id, f"SELECT COUNT(*) as count, MAX({timestamp_column}) as max_ts FROM {source_table}"
         )
         src_count = src_result[0].get("count", 0) if src_result else 0
         src_max_ts = src_result[0].get("max_ts", src_result[0].get("max_updated_at", "")) if src_result else ""
@@ -63,35 +67,77 @@ class SyncMixin:
             "freshness_lag_seconds": freshness_lag_seconds,
             "checksum_match": True,
             "status": status,
-            "validated_at": datetime.now(timezone.utc).isoformat(),
+            "validated_at": datetime.now(UTC).isoformat(),
         }
 
         self.writer.write_metrics("sync_validation", [validation_record])
 
         if status != "healthy":
             from utils.alerting import Alert, AlertSeverity
-            self.alerts.send_alert(Alert(
-                alert_id=str(uuid.uuid4())[:8],
-                severity=AlertSeverity.WARNING if status == "drift_detected" else AlertSeverity.CRITICAL,
-                title=f"Sync {status}: {source_table} -> {target_delta_table}",
-                message=f"Count drift: {count_drift}, Freshness lag: {freshness_lag_seconds}s",
-                source_agent=self.name,
-                metric_name="sync_freshness",
-                metric_value=freshness_lag_seconds,
-                project_id=project_id,
-                branch_id=branch_id,
-            ))
-            self.emit_event(EventType.SYNC_DRIFT_DETECTED, {
-                "source": source_table,
-                "target": target_delta_table,
-                "drift": count_drift,
-            })
+
+            self.alerts.send_alert(
+                Alert(
+                    alert_id=str(uuid.uuid4())[:8],
+                    severity=AlertSeverity.WARNING if status == "drift_detected" else AlertSeverity.CRITICAL,
+                    title=f"Sync {status}: {source_table} -> {target_delta_table}",
+                    message=f"Count drift: {count_drift}, Freshness lag: {freshness_lag_seconds}s",
+                    source_agent=self.name,
+                    metric_name="sync_freshness",
+                    metric_value=freshness_lag_seconds,
+                    project_id=project_id,
+                    branch_id=branch_id,
+                )
+            )
+            self.emit_event(
+                EventType.SYNC_DRIFT_DETECTED,
+                {
+                    "source": source_table,
+                    "target": target_delta_table,
+                    "drift": count_drift,
+                },
+            )
 
         return validation_record
 
-    def validate_sync_integrity(self, project_id: str, branch_id: str,
-                                 source_table: str, target_delta_table: str,
-                                 key_columns: list[str] = None) -> dict:
+    def get_synced_table_api_status(self, source_table: str) -> dict:
+        """
+        Check official sync status via the Synced Tables API.
+        GAP-036: Uses GET /api/2.0/postgres/synced_tables/{table_name}.
+
+        Args:
+            source_table: Table name to check sync status for.
+
+        Returns:
+            Official sync status from the Databricks API.
+        """
+        try:
+            status = self.client.get_synced_table_status(source_table)
+            return {
+                "source_table": source_table,
+                "api_status": status.get("status", "UNKNOWN"),
+                "last_sync_time": status.get("last_sync_time", ""),
+                "source_row_count": status.get("source_row_count", 0),
+                "target_row_count": status.get("target_row_count", 0),
+                "lag_seconds": status.get("lag_seconds", 0),
+                "available": True,
+            }
+        except Exception as e:
+            logger.warning(f"Synced Tables API unavailable for {source_table}: {e}")
+            return {
+                "source_table": source_table,
+                "api_status": "UNAVAILABLE",
+                "available": False,
+                "error": str(e),
+            }
+
+    def validate_sync_integrity(
+        self,
+        project_id: str,
+        branch_id: str,
+        source_table: str,
+        target_delta_table: str,
+        key_columns: list[str] | None = None,
+    ) -> dict:
         """
         Checksum verification on key columns for data integrity.
         PRD FR-05: Integrity check.
@@ -106,8 +152,7 @@ class SyncMixin:
             "status": "integrity_verified",
         }
 
-    def run_full_sync_validation(self, project_id: str, branch_id: str,
-                                  table_pairs: list[dict] = None) -> dict:
+    def run_full_sync_validation(self, project_id: str, branch_id: str, table_pairs: list[dict] | None = None) -> dict:
         """
         Complete sync validation cycle across all configured table pairs.
         PRD FR-05: Every 15 minutes.
@@ -120,19 +165,29 @@ class SyncMixin:
         results = []
         for pair in pairs:
             completeness = self.validate_sync_completeness(
-                project_id, branch_id,
-                pair["source"], pair["target"], pair.get("ts_col", "updated_at"),
+                project_id,
+                branch_id,
+                pair["source"],
+                pair["target"],
+                pair.get("ts_col", "updated_at"),
             )
             integrity = self.validate_sync_integrity(
-                project_id, branch_id,
-                pair["source"], pair["target"],
+                project_id,
+                branch_id,
+                pair["source"],
+                pair["target"],
             )
-            results.append({
-                "source": pair["source"],
-                "target": pair["target"],
-                "completeness": completeness,
-                "integrity": integrity,
-            })
+            # GAP-036: Also check via Synced Tables API
+            api_status = self.get_synced_table_api_status(pair["source"])
+            results.append(
+                {
+                    "source": pair["source"],
+                    "target": pair["target"],
+                    "completeness": completeness,
+                    "integrity": integrity,
+                    "api_status": api_status,
+                }
+            )
 
         healthy = sum(1 for r in results if r["completeness"]["status"] == "healthy")
         return {

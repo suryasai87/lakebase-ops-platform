@@ -5,14 +5,16 @@
 
 # COMMAND ----------
 
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, "/Workspace/Repos/lakebase-ops")
 os.environ.setdefault("OPS_CATALOG", "ops_catalog")
 os.environ.setdefault("OPS_SCHEMA", "lakebase_ops")
 
 # COMMAND ----------
 
-from agents.provisioning_agent import ProvisioningAgent
+from agents.provisioning import ProvisioningAgent
 from config import settings
 
 action = dbutils.widgets.get("action") if "dbutils" in dir() else "enforce_ttl"

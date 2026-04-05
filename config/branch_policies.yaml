@@ -1,0 +1,125 @@
+# Branch Policy Definitions (GAP-038: Policy-as-Code Framework)
+#
+# Declarative policy configuration for Lakebase branch lifecycle management.
+# Loaded by agents/provisioning/policy_engine.py at startup.
+#
+# Policy enforcement order:
+#   1. naming_conventions (validate branch name format)
+#   2. branch_limits (check capacity before creation)
+#   3. ttl_policies (enforce time-to-live by prefix)
+#   4. protection_rules (prevent destructive ops on protected branches)
+
+---
+version: "1.0"
+description: "LakebaseOps branch lifecycle policies"
+
+# --------------------------------------------------------------------------
+# Naming conventions (RFC 1123: lowercase, digits, hyphens; max 63 chars)
+# --------------------------------------------------------------------------
+naming_conventions:
+  max_length: 63
+  allowed_pattern: "^[a-z][a-z0-9-]*[a-z0-9]$"
+  min_length: 3
+  prefixes:
+    ci:
+      pattern: "ci-pr-{number}"
+      description: "CI/CD ephemeral branches tied to pull requests"
+    hotfix:
+      pattern: "hotfix-{ticket_id}"
+      description: "Emergency hotfix branches"
+    perf:
+      pattern: "perf-{test_name}"
+      description: "Performance testing branches"
+    feat:
+      pattern: "feat-{description}"
+      description: "Feature development branches"
+    dev:
+      pattern: "dev-{firstname}"
+      description: "Per-developer sandbox branches"
+    demo:
+      pattern: "demo-{customer}"
+      description: "Customer demo branches"
+    qa:
+      pattern: "qa-release-{version}"
+      description: "QA validation branches"
+    audit:
+      pattern: "audit-{date}"
+      description: "Audit snapshot branches"
+    ai-agent:
+      pattern: "ai-agent-{task}"
+      description: "AI agent ephemeral branches"
+
+# --------------------------------------------------------------------------
+# TTL policies (seconds). null = no TTL (protected branches only).
+# --------------------------------------------------------------------------
+ttl_policies:
+  ci: 14400          # 4 hours
+  hotfix: 86400      # 24 hours
+  perf: 172800       # 48 hours
+  feat: 604800       # 7 days
+  dev: 604800        # 7 days
+  demo: 1209600      # 14 days
+  qa: 1209600        # 14 days
+  audit: 2592000     # 30 days
+  ai-agent: 3600     # 1 hour
+  production: null   # No TTL (protected)
+  staging: null      # No TTL (protected)
+
+# --------------------------------------------------------------------------
+# Branch limits (from Lakebase platform constraints)
+# --------------------------------------------------------------------------
+branch_limits:
+  max_branches_per_project: 500
+  max_unarchived_branches: 10
+  max_root_branches: 3
+  max_protected_branches: 1
+  warning_threshold_pct: 80   # Alert at 80% utilization
+  critical_threshold_pct: 90  # Critical alert at 90%
+
+# --------------------------------------------------------------------------
+# Protection rules
+# --------------------------------------------------------------------------
+protection_rules:
+  protected_branches:
+    - "production"
+    - "staging"
+  prevent_deletion: true
+  prevent_reset_without_approval: true
+  prevent_direct_migration: true
+  allowed_reset_sources:
+    staging: "production"
+    development: "staging"
+
+# --------------------------------------------------------------------------
+# Creator attribution (GAP-040)
+# --------------------------------------------------------------------------
+attribution:
+  required: true
+  valid_creator_types:
+    - "human"
+    - "agent"
+    - "ci"
+  default_creator_type: "human"
+
+# --------------------------------------------------------------------------
+# QA branch policies (GAP-039)
+# --------------------------------------------------------------------------
+qa_branch:
+  source_branch: "staging"
+  naming_prefix: "qa"
+  allow_destructive_tests: true
+  reset_on_failure: true
+  default_ttl_seconds: 1209600  # 14 days
+
+# --------------------------------------------------------------------------
+# Nightly reset schedule (GAP-043)
+# --------------------------------------------------------------------------
+nightly_reset:
+  enabled: true
+  branches:
+    - name: "staging"
+      reset_from: "production"
+      schedule: "0 2 * * *"  # 2 AM UTC daily
+    - name: "development"
+      reset_from: "staging"
+      schedule: "0 3 * * *"  # 3 AM UTC daily

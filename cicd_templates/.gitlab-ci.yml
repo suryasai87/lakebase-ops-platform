@@ -1,0 +1,160 @@
+##############################################################################
+# Lakebase Branch-per-PR Pipeline for GitLab CI
+#
+# Demonstrates the branch-per-PR Lakebase workflow:
+#   1. Create ephemeral Lakebase branch from staging
+#   2. Wait for branch to become ACTIVE
+#   3. Apply database migrations
+#   4. Run integration tests against ephemeral branch
+#   5. Generate schema diff and post to merge request
+#   6. Clean up branch on pipeline completion
+#
+# Requirements:
+#   - CI/CD Variables: DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT
+#   - Databricks CLI v0.278+ (installed in before_script)
+#
+# Usage:
+#   Copy this file to your repo root as .gitlab-ci.yml
+##############################################################################
+
+variables:
+  BRANCH_NAME: "ci-mr-${CI_MERGE_REQUEST_IID}"
+  LAKEBASE_PROJECT: "${LAKEBASE_PROJECT}"
+
+stages:
+  - setup
+  - provision
+  - migrate
+  - test
+  - diff
+  - cleanup
+
+.databricks_cli: &install_databricks_cli
+  before_script:
+    - curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+    - databricks --version
+    - export PATH="$HOME/bin:$PATH"
+
+# ---------------------------------------------------------------------------
+# Stage: setup
+# ---------------------------------------------------------------------------
+install-cli:
+  stage: setup
+  <<: *install_databricks_cli
+  script:
+    - echo "Databricks CLI installed successfully"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# Stage: provision — Create ephemeral Lakebase branch
+# ---------------------------------------------------------------------------
+create-branch:
+  stage: provision
+  <<: *install_databricks_cli
+  script:
+    - |
+      echo "Creating Lakebase branch: ${BRANCH_NAME}"
+      databricks postgres create-branch \
+        "projects/${LAKEBASE_PROJECT}" \
+        "${BRANCH_NAME}" \
+        --json '{
+          "spec": {
+            "source_branch": "projects/'"${LAKEBASE_PROJECT}"'/branches/staging",
+            "ttl": "14400s"
+          }
+        }'
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# Stage: provision — Wait for branch to become active
+# ---------------------------------------------------------------------------
+wait-for-branch:
+  stage: provision
+  <<: *install_databricks_cli
+  needs: ["create-branch"]
+  script:
+    - |
+      for i in $(seq 1 30); do
+        STATUS=$(databricks postgres get-branch \
+          "projects/${LAKEBASE_PROJECT}/branches/${BRANCH_NAME}" \
+          --output json | jq -r '.status.state')
+        echo "Attempt $i: Status=$STATUS"
+        if [ "$STATUS" = "ACTIVE" ]; then
+          echo "Branch is active!"
+          exit 0
+        fi
+        sleep 10
+      done
+      echo "ERROR: Branch did not become active within timeout"
+      exit 1
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# Stage: migrate — Apply database migrations
+# ---------------------------------------------------------------------------
+apply-migrations:
+  stage: migrate
+  <<: *install_databricks_cli
+  needs: ["wait-for-branch"]
+  script:
+    - |
+      echo "Applying migrations to branch: ${BRANCH_NAME}"
+      # Replace with your migration tool:
+      # flyway migrate -url=jdbc:postgresql://${BRANCH_ENDPOINT}:5432/databricks_postgres
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# Stage: test — Run integration tests
+# ---------------------------------------------------------------------------
+integration-tests:
+  stage: test
+  <<: *install_databricks_cli
+  needs: ["apply-migrations"]
+  script:
+    - |
+      pip install -r requirements.txt 2>/dev/null || true
+      echo "Running integration tests against ephemeral branch..."
+      # pytest tests/ -v --branch=${BRANCH_NAME}
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# Stage: diff — Generate and post schema diff
+# ---------------------------------------------------------------------------
+schema-diff:
+  stage: diff
+  <<: *install_databricks_cli
+  needs: ["integration-tests"]
+  script:
+    - |
+      echo "Generating schema diff between staging and ${BRANCH_NAME}..."
+      # python cicd_templates/post_schema_diff.py \
+      #     --project "${LAKEBASE_PROJECT}" \
+      #     --source-branch staging \
+      #     --target-branch "${BRANCH_NAME}" \
+      #     --gitlab-mr-iid "${CI_MERGE_REQUEST_IID}" \
+      #     --gitlab-project-id "${CI_PROJECT_ID}"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------------------------------------------------------------------------
+# Stage: cleanup — Delete ephemeral branch (always runs)
+# ---------------------------------------------------------------------------
+cleanup-branch:
+  stage: cleanup
+  <<: *install_databricks_cli
+  when: always
+  needs: ["schema-diff"]
+  script:
+    - |
+      echo "Cleaning up Lakebase branch: ${BRANCH_NAME}"
+      databricks postgres delete-branch \
+        "projects/${LAKEBASE_PROJECT}/branches/${BRANCH_NAME}" \
+        || true
+      echo "Branch cleanup complete."
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"

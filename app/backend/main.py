@@ -7,11 +7,54 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lakebase_ops_app")
+
+# Paths that bypass auth (health checks, static assets)
+_AUTH_EXEMPT_PREFIXES = ("/api/health", "/assets", "/favicon")
+_IS_LOCAL = os.getenv("LAKEBASE_LOCAL_DEV", "").lower() in ("1", "true", "yes")
+
+
+class DatabricksProxyAuthMiddleware(BaseHTTPMiddleware):
+    """Validate Databricks Apps proxy headers on non-exempt routes.
+
+    When deployed behind the Databricks Apps reverse proxy, every
+    authenticated request carries ``X-Forwarded-User`` and
+    ``X-Forwarded-Email`` headers.  This middleware rejects requests
+    that lack these headers unless the app is running in local-dev
+    mode (``LAKEBASE_LOCAL_DEV=1``).
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+
+        # Skip auth for health checks, static assets, and root
+        if path == "/" or any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES):
+            return await call_next(request)
+
+        # In local dev mode, skip proxy header validation
+        if _IS_LOCAL:
+            return await call_next(request)
+
+        forwarded_user = request.headers.get("X-Forwarded-User", "")
+        forwarded_email = request.headers.get("X-Forwarded-Email", "")
+
+        if not forwarded_user and not forwarded_email:
+            logger.warning(f"Auth rejected: missing proxy headers on {path}")
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Unauthorized — missing Databricks proxy headers"},
+            )
+
+        # Attach user info to request state for downstream use
+        request.state.user = forwarded_user
+        request.state.email = forwarded_email
+        return await call_next(request)
+
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 logger.info(f"main.py loaded, STATIC_DIR={STATIC_DIR}, exists={STATIC_DIR.exists()}")
@@ -33,8 +76,8 @@ app = FastAPI(
 )
 
 _cors_raw = os.getenv("CORS_ORIGINS", "")
-_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_raw else ["*"]
-_cors_credentials = _cors_origins != ["*"]
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_raw else []
+_cors_credentials = bool(_cors_origins)
 
 app.add_middleware(
     CORSMiddleware,
@@ -43,6 +86,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Auth middleware — validates Databricks Apps proxy headers
+app.add_middleware(DatabricksProxyAuthMiddleware)
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -53,7 +100,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # Register API routers
 try:
-    from .routers import health, agents, metrics, performance, indexes, operations, lakebase, jobs, assessment
+    from .routers import agents, assessment, health, indexes, jobs, lakebase, metrics, operations, performance
 
     app.include_router(health.router)
     app.include_router(agents.router)

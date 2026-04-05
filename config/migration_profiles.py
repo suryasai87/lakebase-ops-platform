@@ -8,9 +8,8 @@ for evaluating external PostgreSQL databases for migration to Lakebase.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Optional
 
 
 class SourceEngine(Enum):
@@ -149,15 +148,15 @@ class DatabaseProfile:
     custom_aggregate_count: int = 0
     non_default_collation_count: int = 0
     # DynamoDB-specific (None for PostgreSQL engines)
-    billing_mode: Optional[str] = None
-    gsi_count: Optional[int] = None
-    lsi_count: Optional[int] = None
-    streams_enabled: Optional[bool] = None
-    ttl_enabled: Optional[bool] = None
-    pitr_enabled: Optional[bool] = None
-    global_table_regions: Optional[list[str]] = None
-    item_size_avg_bytes: Optional[int] = None
-    dynamo_table_details: Optional[list[dict]] = None
+    billing_mode: str | None = None
+    gsi_count: int | None = None
+    lsi_count: int | None = None
+    streams_enabled: bool | None = None
+    ttl_enabled: bool | None = None
+    pitr_enabled: bool | None = None
+    global_table_regions: list[str] | None = None
+    item_size_avg_bytes: int | None = None
+    dynamo_table_details: list[dict] | None = None
 
 
 # ── Assessment Results ─────────────────────────────────────────────────────
@@ -231,17 +230,18 @@ class MigrationProfile:
     Created by connect_and_discover, enriched by profile_workload,
     scored by compute_readiness_score, and planned by generate_migration_blueprint.
     """
+
     profile_id: str = ""
     source_engine: SourceEngine = SourceEngine.AURORA_POSTGRESQL
     source_endpoint: str = ""
     source_version: str = ""
     source_region: str = ""
     databases: list[DatabaseProfile] = field(default_factory=list)
-    workload: Optional[WorkloadProfile] = None
-    assessment: Optional[AssessmentResult] = None
-    blueprint: Optional[MigrationBlueprint] = None
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    workload: WorkloadProfile | None = None
+    assessment: AssessmentResult | None = None
+    blueprint: MigrationBlueprint | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def total_size_gb(self) -> float:

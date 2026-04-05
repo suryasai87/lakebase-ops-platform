@@ -5,14 +5,16 @@
 
 # COMMAND ----------
 
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, "/Workspace/Repos/lakebase-ops")
 os.environ.setdefault("OPS_CATALOG", "ops_catalog")
 os.environ.setdefault("OPS_SCHEMA", "lakebase_ops")
 
 # COMMAND ----------
 
-from agents.health_agent import HealthAgent
+from agents.health import HealthAgent
 
 agent = HealthAgent()
 

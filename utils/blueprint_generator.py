@@ -13,7 +13,7 @@ and decommission steps for Aurora, RDS, Cloud SQL, Azure, and self-managed PG.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from config.migration_profiles import (
     ENGINE_KIND,
@@ -151,7 +151,7 @@ def render_blueprint_markdown(
     """Render a migration blueprint as a markdown report."""
     engine_label = _ENGINE_LABELS.get(source_engine, source_engine)
     lines = []
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now = datetime.now(UTC).strftime("%Y-%m-%d")
 
     lines.append(f"# Migration Blueprint: {engine_label} to Lakebase")
     lines.append(f"\n**Generated:** {now}")
@@ -163,7 +163,7 @@ def render_blueprint_markdown(
     lines.append(f"**Risk Level:** {blueprint.risk_level}")
     lines.append(f"**Readiness Score:** {assessment.overall_score}/100 ({assessment.category.value})")
 
-    lines.append(f"\n**Recommended Lakebase Sizing:**")
+    lines.append("\n**Recommended Lakebase Sizing:**")
     lines.append(f"- Tier: {assessment.recommended_tier.value}")
     lines.append(f"- Compute: {assessment.recommended_cu_min}-{assessment.recommended_cu_max} CU")
 
@@ -180,37 +180,55 @@ def render_blueprint_markdown(
             lines.append(f"- {w}")
 
     lines.append("\n## Lakebase Migration Notes\n")
-    lines.append("- **pg_restore --disable-triggers**: Does NOT work on Lakebase. "
-                 "Lakebase prevents disabling system-level foreign key triggers "
-                 "(RI_ConstraintTrigger). Manually disable user-defined triggers before "
-                 "data load and re-enable after.")
-    lines.append("- **Recommended dump format**: Use plain-text pg_dump (`pg_dump > data.sql`) "
-                 "and load with `psql -f data.sql`. This gives full control over load order "
-                 "and avoids pg_restore trigger issues.")
-    lines.append("- **--no-owner --no-privileges**: Always use these flags. Lakebase uses "
-                 "Databricks identity management; source roles will not exist on the target.")
+    lines.append(
+        "- **pg_restore --disable-triggers**: Does NOT work on Lakebase. "
+        "Lakebase prevents disabling system-level foreign key triggers "
+        "(RI_ConstraintTrigger). Manually disable user-defined triggers before "
+        "data load and re-enable after."
+    )
+    lines.append(
+        "- **Recommended dump format**: Use plain-text pg_dump (`pg_dump > data.sql`) "
+        "and load with `psql -f data.sql`. This gives full control over load order "
+        "and avoids pg_restore trigger issues."
+    )
+    lines.append(
+        "- **--no-owner --no-privileges**: Always use these flags. Lakebase uses "
+        "Databricks identity management; source roles will not exist on the target."
+    )
 
     if source_engine == "cloud-sql-postgresql":
-        lines.append("- **Cloud SQL note**: The `cloudsqlsuperuser` role does not exist on Lakebase. "
-                     "Extension creation and admin tasks use the Lakebase admin role instead.")
+        lines.append(
+            "- **Cloud SQL note**: The `cloudsqlsuperuser` role does not exist on Lakebase. "
+            "Extension creation and admin tasks use the Lakebase admin role instead."
+        )
     elif source_engine == "azure-postgresql":
-        lines.append("- **Azure note**: The `azure_pg_admin` role does not exist on Lakebase. "
-                     "PgBouncer built-in pooling (port 6432) is not available; use application-side pooling.")
+        lines.append(
+            "- **Azure note**: The `azure_pg_admin` role does not exist on Lakebase. "
+            "PgBouncer built-in pooling (port 6432) is not available; use application-side pooling."
+        )
     elif source_engine == "self-managed-postgresql":
-        lines.append("- **Self-managed note**: Custom-compiled extensions must be verified against "
-                     "Lakebase's supported extension list. OS-level dependencies are not transferable.")
+        lines.append(
+            "- **Self-managed note**: Custom-compiled extensions must be verified against "
+            "Lakebase's supported extension list. OS-level dependencies are not transferable."
+        )
     elif source_engine == "alloydb-postgresql":
-        lines.append("- **AlloyDB note**: The `alloydbsuperuser` role does not exist on Lakebase. "
-                     "AlloyDB AI/ML integration (`google_ml_integration`) must be replaced with "
-                     "Databricks Foundation Model API. Columnar engine acceleration is not available.")
+        lines.append(
+            "- **AlloyDB note**: The `alloydbsuperuser` role does not exist on Lakebase. "
+            "AlloyDB AI/ML integration (`google_ml_integration`) must be replaced with "
+            "Databricks Foundation Model API. Columnar engine acceleration is not available."
+        )
     elif source_engine == "supabase-postgresql":
-        lines.append("- **Supabase note**: Supabase-specific schemas (`auth`, `storage`, `realtime`) "
-                     "are platform-managed and do not migrate. Replace Supabase Auth with Databricks "
-                     "identity management. Replace Supabase Realtime with application-level WebSockets.")
+        lines.append(
+            "- **Supabase note**: Supabase-specific schemas (`auth`, `storage`, `realtime`) "
+            "are platform-managed and do not migrate. Replace Supabase Auth with Databricks "
+            "identity management. Replace Supabase Realtime with application-level WebSockets."
+        )
     elif source_engine == "dynamodb":
-        lines.append("- **DynamoDB note**: This is a cross-engine NoSQL-to-relational migration. "
-                     "Schema must be redesigned from access patterns, not ported directly. "
-                     "Use DynamoDB Export to S3 (requires PITR) for zero-impact data extraction.")
+        lines.append(
+            "- **DynamoDB note**: This is a cross-engine NoSQL-to-relational migration. "
+            "Schema must be redesigned from access patterns, not ported directly. "
+            "Use DynamoDB Export to S3 (requires PITR) for zero-impact data extraction."
+        )
         lines.append("\n**DynamoDB Type Mapping:**\n")
         lines.append("| DynamoDB | PostgreSQL | Notes |")
         lines.append("|----------|-----------|-------|")
@@ -229,9 +247,13 @@ def render_blueprint_markdown(
     if not is_nosql and (assessment.supported_extensions or assessment.unsupported_extensions):
         lines.append("\n---\n## Extension Compatibility\n")
         if assessment.supported_extensions:
-            lines.append(f"**Supported ({len(assessment.supported_extensions)}):** {', '.join(sorted(assessment.supported_extensions))}")
+            lines.append(
+                f"**Supported ({len(assessment.supported_extensions)}):** {', '.join(sorted(assessment.supported_extensions))}"
+            )
         if assessment.unsupported_extensions:
-            lines.append(f"\n**Unsupported ({len(assessment.unsupported_extensions)}):** {', '.join(sorted(assessment.unsupported_extensions))}")
+            lines.append(
+                f"\n**Unsupported ({len(assessment.unsupported_extensions)}):** {', '.join(sorted(assessment.unsupported_extensions))}"
+            )
 
     lines.append("\n---\n## Prerequisites\n")
     for p in blueprint.prerequisites:
@@ -333,19 +355,22 @@ def _phase_1_schema(
         steps.insert(2, "Verify custom-compiled extensions are available on Lakebase or identify workarounds")
 
     if assessment.unsupported_extensions:
-        steps.insert(2, f"Address {len(assessment.unsupported_extensions)} unsupported extensions: {', '.join(assessment.unsupported_extensions)}")
+        steps.insert(
+            2,
+            f"Address {len(assessment.unsupported_extensions)} unsupported extensions: {', '.join(assessment.unsupported_extensions)}",
+        )
 
     if source_engine == "cloud-sql-postgresql":
         commands = [
-            f"# Option 1: pg_dump via Cloud SQL Auth Proxy",
+            "# Option 1: pg_dump via Cloud SQL Auth Proxy",
             f"pg_dump --schema-only -h 127.0.0.1 -p 5432 -U <user> -d {db_name} > schema.sql",
-            f"# Option 2: gcloud sql export",
+            "# Option 2: gcloud sql export",
             f"gcloud sql export sql {source_ep} gs://<bucket>/schema.sql --database={db_name} --offload",
             f"psql -h {lakebase_ep} -d {db_name} -U <user> -f schema.sql",
         ]
     elif source_engine == "azure-postgresql":
         commands = [
-            f"# pg_dump via Azure Private Link or public endpoint",
+            "# pg_dump via Azure Private Link or public endpoint",
             f"pg_dump --schema-only -h {source_ep} -U <user> -d {db_name} > schema.sql",
             f"psql -h {lakebase_ep} -d {db_name} -U <user> -f schema.sql",
         ]
@@ -388,24 +413,24 @@ def _phase_2_data(
 
         if source_engine == "cloud-sql-postgresql":
             commands = [
-                f"# Plain-text dump via Cloud SQL Auth Proxy (recommended for Lakebase)",
+                "# Plain-text dump via Cloud SQL Auth Proxy (recommended for Lakebase)",
                 f"pg_dump -h 127.0.0.1 -p 5432 -U <user> -d {db_name} --no-owner --no-privileges > data.sql",
                 f"psql -h {lakebase_ep} -U <user> -d {db_name} -f data.sql",
             ]
         elif source_engine == "self-managed-postgresql":
             steps.insert(1, "Verify pg_dump client version matches source PostgreSQL major version")
             commands = [
-                f"# Plain-text dump (recommended for Lakebase)",
+                "# Plain-text dump (recommended for Lakebase)",
                 f"pg_dump -h {source_ep} -U <user> -d {db_name} --no-owner --no-privileges > data.sql",
                 f"psql -h {lakebase_ep} -U <user> -d {db_name} -f data.sql",
             ]
         else:
             commands = [
-                f"# Plain-text dump (recommended for Lakebase)",
+                "# Plain-text dump (recommended for Lakebase)",
                 f"pg_dump -h {source_ep} -U <user> -d {db_name} --no-owner --no-privileges > data.sql",
                 f"psql -h {lakebase_ep} -U <user> -d {db_name} -f data.sql",
-                f"",
-                f"# Alternative: custom format (note --disable-triggers limitation)",
+                "",
+                "# Alternative: custom format (note --disable-triggers limitation)",
                 f"pg_dump -h {source_ep} -U <user> -d {db_name} -F c -f data.dump",
                 f"pg_restore -h {lakebase_ep} -U <user> -d {db_name} -F c --no-owner --no-privileges data.dump",
             ]
@@ -424,14 +449,17 @@ def _phase_2_data(
 
         if source_engine == "cloud-sql-postgresql":
             steps[1] = "Enable logical replication on Cloud SQL (set cloudsql.logical_decoding = on)"
-            steps.insert(1, "Note: Cloud SQL does not support being a logical replication publisher natively; consider pg_dump + Datastream for CDC")
+            steps.insert(
+                1,
+                "Note: Cloud SQL does not support being a logical replication publisher natively; consider pg_dump + Datastream for CDC",
+            )
 
         commands = [
             f"pg_dump -h {source_ep} -U <user> -d {db_name} -F c -f data.dump",
             f"pg_restore -h {lakebase_ep} -U <user> -d {db_name} -F c data.dump",
             f"-- On {engine_label}:",
             "ALTER SYSTEM SET wal_level = logical;",
-            f"CREATE PUBLICATION datasync FOR ALL TABLES;",
+            "CREATE PUBLICATION datasync FOR ALL TABLES;",
             "-- On Lakebase:",
             f"CREATE SUBSCRIPTION datasync_sub CONNECTION 'host={source_ep} dbname={db_name}' PUBLICATION datasync;",
         ]
@@ -482,7 +510,7 @@ def _phase_3_application(
 
     if source_engine == "dynamodb":
         steps = [
-            f"Rewrite DynamoDB SDK calls (GetItem, PutItem, Query, Scan) to SQL queries via psycopg",
+            "Rewrite DynamoDB SDK calls (GetItem, PutItem, Query, Scan) to SQL queries via psycopg",
             auth_note,
             "Replace DynamoDB Streams + Lambda consumers with application-level triggers or Lakeflow Connect",
             "Replace DAX caching layer with application-side caching (Redis) or PostgreSQL materialized views",

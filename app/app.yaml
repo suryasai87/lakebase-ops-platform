@@ -8,12 +8,26 @@ command:
 
 env:
   - name: OPS_CATALOG
-    value: "${OPS_CATALOG}"
+    value: "hls_amer_catalog"
   - name: OPS_SCHEMA
-    value: "${OPS_SCHEMA}"
+    value: "lakebase_ops"
+  - name: ARCHIVE_SCHEMA
+    value: "lakebase_archive"
   - name: SQL_WAREHOUSE_ID
-    value: "${SQL_WAREHOUSE_ID}"
+    value: "4b28691c780d9875"
   - name: LAKEBASE_PROJECT_ID
-    value: "${LAKEBASE_PROJECT_ID}"
+    value: "83eb266d-27f8-4467-a7df-2b048eff09d7"
+  - name: LAKEBASE_PROJECT_NAME
+    value: "surya_lakebase_auto"
   - name: LAKEBASE_ENDPOINT_HOST
-    value: "${LAKEBASE_ENDPOINT_HOST}"
+    value: "ep-hidden-haze-d2v9brhq.database.us-east-1.cloud.databricks.com"
+  - name: LAKEBASE_ENDPOINT_NAME
+    value: "surya_lakebase_auto"
+  - name: LAKEBASE_DEFAULT_BRANCH
+    value: "production"
+  - name: LAKEBASE_DB_NAME
+    value: "databricks_postgres"
+  - name: LAKEBASE_JOB_IDS
+    value: '{"metric_collector": 810342068717312, "index_analyzer": 722214982605859, "vacuum_scheduler": 503076690184965, "sync_validator": 613672596244410, "branch_manager": 855317055684842, "cold_archiver": 890145200992423, "cost_tracker": 641844238034040}'
+  - name: CORS_ORIGINS
+    value: "https://lakebase-ops-v2-1602460480284688.aws.databricksapps.com"

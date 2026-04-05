@@ -14,6 +14,8 @@ import SmartToyIcon from "@mui/icons-material/SmartToy";
 import SpeedIcon from "@mui/icons-material/Speed";
 import StorageIcon from "@mui/icons-material/Storage";
 import BuildIcon from "@mui/icons-material/Build";
+import AccountTreeIcon from "@mui/icons-material/AccountTree";
+import TrendingUpIcon from "@mui/icons-material/TrendingUp";
 import MonitorHeartIcon from "@mui/icons-material/MonitorHeart";
 import SwapHorizIcon from "@mui/icons-material/SwapHoriz";
 
@@ -23,6 +25,8 @@ const NAV = [
   { label: "Performance", path: "/performance", icon: <SpeedIcon /> },
   { label: "Indexes", path: "/indexes", icon: <StorageIcon /> },
   { label: "Operations", path: "/operations", icon: <BuildIcon /> },
+  { label: "Branches", path: "/branches", icon: <AccountTreeIcon /> },
+  { label: "Adoption", path: "/adoption", icon: <TrendingUpIcon /> },
   { label: "Live Stats", path: "/live", icon: <MonitorHeartIcon /> },
   { label: "Assessment", path: "/assessment", icon: <SwapHorizIcon /> },
 ];

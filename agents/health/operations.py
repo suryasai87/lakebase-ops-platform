@@ -56,7 +56,7 @@ class OperationsMixin:
             "current_timeout": "5 minutes",
             "recommended_timeout": "10 minutes",
             "reason": "Branch has bursty traffic with 8-12 minute gaps between requests. "
-                      "Increasing timeout to 10 minutes reduces cold starts by 40%.",
+            "Increasing timeout to 10 minutes reduces cold starts by 40%.",
             "estimated_savings": "15% reduction in total CU-hours (fewer cold start overhead)",
         }
 
@@ -136,11 +136,14 @@ class OperationsMixin:
         else:
             status = "unknown_action"
 
-        self.emit_event(EventType.SELF_HEAL_EXECUTED, {
-            "issue_id": issue_id,
-            "action": action,
-            "status": status,
-        })
+        self.emit_event(
+            EventType.SELF_HEAL_EXECUTED,
+            {
+                "issue_id": issue_id,
+                "action": action,
+                "status": status,
+            },
+        )
 
         return {"issue_id": issue_id, "action": action, "status": status}
 
@@ -148,8 +151,7 @@ class OperationsMixin:
     # UC-14: Natural Language DBA Operations (V2)
     # -----------------------------------------------------------------------
 
-    def natural_language_dba(self, question: str, project_id: str = "",
-                              branch_id: str = "") -> dict:
+    def natural_language_dba(self, question: str, project_id: str = "", branch_id: str = "") -> dict:
         """
         LLM-powered DBA Q&A for developers.
         UC-14: "Why is my query slow?" -> actionable answer.

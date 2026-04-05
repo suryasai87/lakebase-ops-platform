@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from framework.agent_framework import EventType
 from sql import queries
@@ -91,23 +91,26 @@ class MonitoringMixin:
             metrics["wal_write_time_ms"] = wal.get("wal_write_time", 0.0)
 
         # Persist all metrics to Delta
-        now = datetime.now(timezone.utc).isoformat()
-        records = [{
-            "metric_id": str(uuid.uuid4())[:8],
-            "project_id": project_id,
-            "branch_id": branch_id,
-            "metric_name": name,
-            "metric_value": float(value) if isinstance(value, (int, float)) else 0.0,
-            "threshold_level": "normal",
-            "snapshot_timestamp": now,
-        } for name, value in metrics.items() if isinstance(value, (int, float))]
+        now = datetime.now(UTC).isoformat()
+        records = [
+            {
+                "metric_id": str(uuid.uuid4())[:8],
+                "project_id": project_id,
+                "branch_id": branch_id,
+                "metric_name": name,
+                "metric_value": float(value) if isinstance(value, (int, float)) else 0.0,
+                "threshold_level": "normal",
+                "snapshot_timestamp": now,
+            }
+            for name, value in metrics.items()
+            if isinstance(value, (int, float))
+        ]
 
         self.writer.write_metrics("lakebase_metrics", records)
 
         return {"project_id": project_id, "branch_id": branch_id, "metrics": metrics}
 
-    def evaluate_alert_thresholds(self, metrics: dict, project_id: str = "",
-                                   branch_id: str = "") -> dict:
+    def evaluate_alert_thresholds(self, metrics: dict, project_id: str = "", branch_id: str = "") -> dict:
         """
         Evaluate all 8 PRD FR-04 metrics against warning/critical thresholds.
         Triggers SOPs when breached.
@@ -120,88 +123,111 @@ class MonitoringMixin:
         # 1. Buffer cache hit ratio
         cache_hit = metrics.get("cache_hit_ratio", 1.0)
         if cache_hit < self.thresholds.cache_hit_critical:
-            alert = self.alerts.send_alert(Alert(
-                alert_id=str(uuid.uuid4())[:8],
-                severity=AlertSeverity.CRITICAL,
-                title="Cache Hit Ratio CRITICAL",
-                message=f"Cache hit ratio: {cache_hit:.2%} (threshold: {self.thresholds.cache_hit_critical:.0%}). Analyze shared_buffers, recommend CU increase.",
-                source_agent=self.name,
-                metric_name="cache_hit_ratio", metric_value=cache_hit,
-                threshold=self.thresholds.cache_hit_critical,
-                project_id=project_id, branch_id=branch_id,
-                sop_action="Analyze shared_buffers, recommend CU increase",
-            ))
+            alert = self.alerts.send_alert(
+                Alert(
+                    alert_id=str(uuid.uuid4())[:8],
+                    severity=AlertSeverity.CRITICAL,
+                    title="Cache Hit Ratio CRITICAL",
+                    message=f"Cache hit ratio: {cache_hit:.2%} (threshold: {self.thresholds.cache_hit_critical:.0%}). Analyze shared_buffers, recommend CU increase.",
+                    source_agent=self.name,
+                    metric_name="cache_hit_ratio",
+                    metric_value=cache_hit,
+                    threshold=self.thresholds.cache_hit_critical,
+                    project_id=project_id,
+                    branch_id=branch_id,
+                    sop_action="Analyze shared_buffers, recommend CU increase",
+                )
+            )
             alerts_triggered.append(alert.to_dict())
         elif cache_hit < self.thresholds.cache_hit_warning:
-            alert = self.alerts.send_alert(Alert(
-                alert_id=str(uuid.uuid4())[:8],
-                severity=AlertSeverity.WARNING,
-                title="Cache Hit Ratio Warning",
-                message=f"Cache hit ratio: {cache_hit:.2%}",
-                source_agent=self.name,
-                metric_name="cache_hit_ratio", metric_value=cache_hit,
-                threshold=self.thresholds.cache_hit_warning,
-                project_id=project_id, branch_id=branch_id,
-            ))
+            alert = self.alerts.send_alert(
+                Alert(
+                    alert_id=str(uuid.uuid4())[:8],
+                    severity=AlertSeverity.WARNING,
+                    title="Cache Hit Ratio Warning",
+                    message=f"Cache hit ratio: {cache_hit:.2%}",
+                    source_agent=self.name,
+                    metric_name="cache_hit_ratio",
+                    metric_value=cache_hit,
+                    threshold=self.thresholds.cache_hit_warning,
+                    project_id=project_id,
+                    branch_id=branch_id,
+                )
+            )
             alerts_triggered.append(alert.to_dict())
 
         # 2. Connection utilization
         conn_util = metrics.get("connection_utilization", 0.0)
         if conn_util > self.thresholds.conn_util_critical:
-            alert = self.alerts.send_alert(Alert(
-                alert_id=str(uuid.uuid4())[:8],
-                severity=AlertSeverity.CRITICAL,
-                title="Connection Utilization CRITICAL",
-                message=f"Connection utilization: {conn_util:.0%}. Auto-terminating idle connections > 30min.",
-                source_agent=self.name,
-                metric_name="connection_utilization", metric_value=conn_util,
-                threshold=self.thresholds.conn_util_critical,
-                project_id=project_id, branch_id=branch_id,
-                sop_action="Auto-terminate idle > 30min",
-                auto_remediated=True,
-            ))
+            alert = self.alerts.send_alert(
+                Alert(
+                    alert_id=str(uuid.uuid4())[:8],
+                    severity=AlertSeverity.CRITICAL,
+                    title="Connection Utilization CRITICAL",
+                    message=f"Connection utilization: {conn_util:.0%}. Auto-terminating idle connections > 30min.",
+                    source_agent=self.name,
+                    metric_name="connection_utilization",
+                    metric_value=conn_util,
+                    threshold=self.thresholds.conn_util_critical,
+                    project_id=project_id,
+                    branch_id=branch_id,
+                    sop_action="Auto-terminate idle > 30min",
+                    auto_remediated=True,
+                )
+            )
             alerts_triggered.append(alert.to_dict())
             # Auto-execute low-risk SOP
             sop_result = self.terminate_idle_connections(project_id, branch_id)
             sops_executed.append({"sop": "terminate_idle", "result": sop_result})
         elif conn_util > self.thresholds.conn_util_warning:
-            alert = self.alerts.send_alert(Alert(
-                alert_id=str(uuid.uuid4())[:8],
-                severity=AlertSeverity.WARNING,
-                title="Connection Utilization Warning",
-                message=f"Connection utilization: {conn_util:.0%}",
-                source_agent=self.name,
-                metric_name="connection_utilization", metric_value=conn_util,
-                threshold=self.thresholds.conn_util_warning,
-                project_id=project_id, branch_id=branch_id,
-            ))
+            alert = self.alerts.send_alert(
+                Alert(
+                    alert_id=str(uuid.uuid4())[:8],
+                    severity=AlertSeverity.WARNING,
+                    title="Connection Utilization Warning",
+                    message=f"Connection utilization: {conn_util:.0%}",
+                    source_agent=self.name,
+                    metric_name="connection_utilization",
+                    metric_value=conn_util,
+                    threshold=self.thresholds.conn_util_warning,
+                    project_id=project_id,
+                    branch_id=branch_id,
+                )
+            )
             alerts_triggered.append(alert.to_dict())
 
         # 3. Dead tuple ratio
         dead_ratio = metrics.get("max_dead_tuple_ratio", 0.0)
         if dead_ratio > self.thresholds.dead_tuple_critical:
             table = metrics.get("worst_dead_tuple_table", "unknown")
-            alert = self.alerts.send_alert(Alert(
-                alert_id=str(uuid.uuid4())[:8],
-                severity=AlertSeverity.CRITICAL,
-                title=f"Dead Tuple Ratio CRITICAL on {table}",
-                message=f"Dead tuple ratio: {dead_ratio:.0%}. Scheduling VACUUM ANALYZE.",
-                source_agent=self.name,
-                metric_name="dead_tuple_ratio", metric_value=dead_ratio,
-                threshold=self.thresholds.dead_tuple_critical,
-                project_id=project_id, branch_id=branch_id,
-                sop_action="Schedule VACUUM ANALYZE",
-                auto_remediated=True,
-            ))
+            alert = self.alerts.send_alert(
+                Alert(
+                    alert_id=str(uuid.uuid4())[:8],
+                    severity=AlertSeverity.CRITICAL,
+                    title=f"Dead Tuple Ratio CRITICAL on {table}",
+                    message=f"Dead tuple ratio: {dead_ratio:.0%}. Scheduling VACUUM ANALYZE.",
+                    source_agent=self.name,
+                    metric_name="dead_tuple_ratio",
+                    metric_value=dead_ratio,
+                    threshold=self.thresholds.dead_tuple_critical,
+                    project_id=project_id,
+                    branch_id=branch_id,
+                    sop_action="Schedule VACUUM ANALYZE",
+                    auto_remediated=True,
+                )
+            )
             alerts_triggered.append(alert.to_dict())
             sops_executed.append({"sop": "vacuum_triggered", "table": table})
 
-            self.emit_event(EventType.THRESHOLD_BREACHED, {
-                "metric": "dead_tuple_ratio",
-                "value": dead_ratio,
-                "table": table,
-                "action": "vacuum_scheduled",
-            })
+            self.emit_event(
+                EventType.THRESHOLD_BREACHED,
+                {
+                    "metric": "dead_tuple_ratio",
+                    "value": dead_ratio,
+                    "table": table,
+                    "action": "vacuum_scheduled",
+                },
+            )
 
         # 4. Slow queries (from persisted data)
         # Checked via pg_stat_statements history in Performance Agent
@@ -211,17 +237,21 @@ class MonitoringMixin:
         if isinstance(txid_age, str):
             txid_age = int(txid_age)
         if txid_age > self.thresholds.txid_age_critical:
-            alert = self.alerts.send_alert(Alert(
-                alert_id=str(uuid.uuid4())[:8],
-                severity=AlertSeverity.CRITICAL,
-                title="TXID Wraparound CRITICAL",
-                message=f"Transaction ID age: {txid_age:,}. Emergency VACUUM FREEZE required!",
-                source_agent=self.name,
-                metric_name="txid_age", metric_value=txid_age,
-                threshold=self.thresholds.txid_age_critical,
-                project_id=project_id, branch_id=branch_id,
-                sop_action="Emergency VACUUM FREEZE",
-            ))
+            alert = self.alerts.send_alert(
+                Alert(
+                    alert_id=str(uuid.uuid4())[:8],
+                    severity=AlertSeverity.CRITICAL,
+                    title="TXID Wraparound CRITICAL",
+                    message=f"Transaction ID age: {txid_age:,}. Emergency VACUUM FREEZE required!",
+                    source_agent=self.name,
+                    metric_name="txid_age",
+                    metric_value=txid_age,
+                    threshold=self.thresholds.txid_age_critical,
+                    project_id=project_id,
+                    branch_id=branch_id,
+                    sop_action="Emergency VACUUM FREEZE",
+                )
+            )
             alerts_triggered.append(alert.to_dict())
 
         return {
@@ -231,8 +261,9 @@ class MonitoringMixin:
             "sops": sops_executed,
         }
 
-    def execute_low_risk_sop(self, issue_type: str, project_id: str,
-                              branch_id: str, context: dict = None) -> dict:
+    def execute_low_risk_sop(
+        self, issue_type: str, project_id: str, branch_id: str, context: dict | None = None
+    ) -> dict:
         """
         Auto-execute safe remediation actions.
         Low-risk SOPs: vacuum, idle connection termination.
@@ -242,9 +273,13 @@ class MonitoringMixin:
         if issue_type == "high_dead_tuples":
             table = ctx.get("table", "")
             self.client.execute_statement(project_id, branch_id, f"VACUUM ANALYZE {table}")
-            self.emit_event(EventType.SELF_HEAL_EXECUTED, {
-                "issue": issue_type, "action": f"VACUUM ANALYZE {table}",
-            })
+            self.emit_event(
+                EventType.SELF_HEAL_EXECUTED,
+                {
+                    "issue": issue_type,
+                    "action": f"VACUUM ANALYZE {table}",
+                },
+            )
             return {"action": f"VACUUM ANALYZE {table}", "status": "executed"}
 
         elif issue_type == "high_connections":

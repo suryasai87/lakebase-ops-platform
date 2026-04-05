@@ -1,19 +1,37 @@
 """Backend router unit tests using FastAPI TestClient."""
 
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.backend.main import app
 
 client = TestClient(app, raise_server_exceptions=False)
 
+# Auth headers required by DatabricksProxyAuthMiddleware for non-health endpoints
+_AUTH_HEADERS = {
+    "X-Forwarded-User": "test-user",
+    "X-Forwarded-Email": "test@databricks.com",
+}
+
+
+def _get(path, **kwargs):
+    """GET with proxy auth headers."""
+    headers = {**_AUTH_HEADERS, **kwargs.pop("headers", {})}
+    return client.get(path, headers=headers, **kwargs)
+
+
+def _post(path, **kwargs):
+    """POST with proxy auth headers."""
+    headers = {**_AUTH_HEADERS, **kwargs.pop("headers", {})}
+    return client.post(path, headers=headers, **kwargs)
+
 
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
+
 
 class TestHealth:
     @patch("app.backend.routers.health.execute_query")
@@ -42,34 +60,53 @@ class TestHealth:
 # Metrics
 # ---------------------------------------------------------------------------
 
+
 class TestMetrics:
     @patch("app.backend.routers.metrics.get_cached")
     def test_overview(self, mock_cached):
-        mock_cached.return_value = [{"metric_name": "cache_hit_ratio", "metric_value": "0.99"}]
-        resp = client.get("/api/metrics/overview")
+        mock_cached.return_value = [
+            {
+                "project_id": "proj1",
+                "branch_id": "production",
+                "metric_name": "cache_hit_ratio",
+                "metric_value": "0.99",
+                "threshold_level": "normal",
+                "snapshot_timestamp": "2026-03-01T00:00:00",
+            }
+        ]
+        resp = _get("/api/metrics/overview")
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
     @patch("app.backend.routers.metrics.get_cached")
     def test_trends_valid_metric(self, mock_cached):
-        mock_cached.return_value = [{"hour": "2026-03-01T00:00:00", "avg_value": "0.99"}]
-        resp = client.get("/api/metrics/trends?metric=cache_hit_ratio&hours=24")
+        mock_cached.return_value = [
+            {
+                "metric_name": "cache_hit_ratio",
+                "hour": "2026-03-01T00:00:00",
+                "avg_value": "0.99",
+                "min_value": "0.98",
+                "max_value": "1.00",
+            }
+        ]
+        resp = _get("/api/metrics/trends?metric=cache_hit_ratio&hours=24")
         assert resp.status_code == 200
 
     def test_trends_invalid_metric_returns_400(self):
-        resp = client.get("/api/metrics/trends?metric=DROP TABLE users")
+        resp = _get("/api/metrics/trends?metric=DROP TABLE users")
         assert resp.status_code == 400
         body = resp.json()
         assert "Invalid metric" in body["detail"]
 
     def test_trends_sql_injection_blocked(self):
-        resp = client.get("/api/metrics/trends?metric=x' OR '1'='1")
+        resp = _get("/api/metrics/trends?metric=x' OR '1'='1")
         assert resp.status_code == 400
 
 
 # ---------------------------------------------------------------------------
 # Assessment
 # ---------------------------------------------------------------------------
+
 
 class TestAssessment:
     @patch("app.backend.routers.assessment._get_agent")
@@ -83,7 +120,7 @@ class TestAssessment:
             "source_password": "secret",
         }
         mock_agent_fn.return_value = agent
-        resp = client.post("/api/assessment/discover", json={"mock": True})
+        resp = _post("/api/assessment/discover", json={"mock": True})
         assert resp.status_code == 200
         body = resp.json()
         assert "profile_id" in body
@@ -105,7 +142,7 @@ class TestAssessment:
             "hot_tables_count": 5,
         }
         mock_agent_fn.return_value = agent
-        resp = client.post("/api/assessment/profile", json={"mock": True})
+        resp = _post("/api/assessment/profile", json={"mock": True})
         assert resp.status_code == 200
         body = resp.json()
         assert body["qps"] == 2800
@@ -127,7 +164,7 @@ class TestAssessment:
             "unsupported_extensions": ["pg_cron"],
         }
         mock_agent_fn.return_value = agent
-        resp = client.post("/api/assessment/readiness", json={"mock": True})
+        resp = _post("/api/assessment/readiness", json={"mock": True})
         assert resp.status_code == 200
         body = resp.json()
         assert body["overall_score"] == 92
@@ -147,7 +184,7 @@ class TestAssessment:
             "report_markdown": "# Blueprint\n...",
         }
         mock_agent_fn.return_value = agent
-        resp = client.post("/api/assessment/blueprint", json={"mock": True})
+        resp = _post("/api/assessment/blueprint", json={"mock": True})
         assert resp.status_code == 200
         body = resp.json()
         assert body["strategy"] == "hybrid"
@@ -160,9 +197,11 @@ class TestAssessment:
 # Profile cache
 # ---------------------------------------------------------------------------
 
+
 class TestProfileCache:
     def test_cache_set_strips_sensitive(self):
         from app.backend.routers.assessment import _ProfileCache
+
         cache = _ProfileCache(ttl=60)
         cache.set("p1", {"name": "test", "source_password": "secret", "_token": "abc"})
         data = cache.get("p1")
@@ -172,6 +211,7 @@ class TestProfileCache:
 
     def test_cache_ttl_expiry(self):
         from app.backend.routers.assessment import _ProfileCache
+
         cache = _ProfileCache(ttl=1)
         cache.set("p1", {"name": "test"})
         assert cache.get("p1") == {"name": "test"}
@@ -180,6 +220,7 @@ class TestProfileCache:
 
     def test_cache_eviction(self):
         from app.backend.routers.assessment import _ProfileCache
+
         cache = _ProfileCache(ttl=1)
         cache.set("p1", {"a": 1})
         cache.set("p2", {"b": 2})
@@ -194,7 +235,269 @@ class TestProfileCache:
 # Global exception handler
 # ---------------------------------------------------------------------------
 
+
 class TestGlobalErrorHandler:
     def test_404_on_unknown_api_route(self):
-        resp = client.get("/api/nonexistent")
+        resp = _get("/api/nonexistent")
         assert resp.status_code in (404, 200)
+
+
+# ---------------------------------------------------------------------------
+# Performance (GAP-022)
+# ---------------------------------------------------------------------------
+
+
+class TestPerformance:
+    @patch("app.backend.routers.performance.get_cached")
+    def test_slow_queries(self, mock_cached):
+        mock_cached.return_value = [
+            {
+                "query": "SELECT 1",
+                "queryid": "1",
+                "total_calls": "100",
+                "avg_exec_time_ms": "5.50",
+                "total_time_ms": "550.00",
+                "total_rows": "1000",
+                "total_read_mb": "1.20",
+                "last_seen": "2026-03-01",
+            }
+        ]
+        resp = _get("/api/performance/queries?hours=24&limit=10")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) == 1
+
+    @patch("app.backend.routers.performance.get_cached")
+    def test_slow_queries_default_params(self, mock_cached):
+        mock_cached.return_value = []
+        resp = _get("/api/performance/queries")
+        assert resp.status_code == 200
+
+    @patch("app.backend.routers.performance.get_cached")
+    def test_slow_queries_invalid_hours(self, mock_cached):
+        """hours parameter has ge=1 le=168 validation."""
+        resp = _get("/api/performance/queries?hours=0")
+        assert resp.status_code == 422
+
+    @patch("app.backend.routers.performance.get_cached")
+    def test_regressions(self, mock_cached):
+        mock_cached.return_value = [
+            {"queryid": "1", "baseline_ms": "2.00", "recent_ms": "5.00", "pct_change": "150.0", "status": "REGRESSION"}
+        ]
+        resp = _get("/api/performance/regressions")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+
+    @patch("app.backend.routers.performance.get_cached")
+    def test_regressions_empty(self, mock_cached):
+        mock_cached.return_value = []
+        resp = _get("/api/performance/regressions")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+
+# ---------------------------------------------------------------------------
+# Indexes (GAP-022)
+# ---------------------------------------------------------------------------
+
+
+class TestIndexes:
+    @patch("app.backend.routers.indexes.get_cached")
+    def test_recommendations(self, mock_cached):
+        mock_cached.return_value = [
+            {
+                "recommendation_type": "drop_unused",
+                "confidence": "high",
+                "count": "5",
+                "pending_review": "3",
+                "approved": "1",
+                "executed": "1",
+                "rejected": "0",
+            }
+        ]
+        resp = _get("/api/indexes/recommendations")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert data[0]["recommendation_type"] == "drop_unused"
+
+    @patch("app.backend.routers.indexes.get_cached")
+    def test_recommendations_empty(self, mock_cached):
+        mock_cached.return_value = []
+        resp = _get("/api/indexes/recommendations")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+
+# ---------------------------------------------------------------------------
+# Operations (GAP-022)
+# ---------------------------------------------------------------------------
+
+
+class TestOperations:
+    @patch("app.backend.routers.operations.get_cached")
+    def test_vacuum_history(self, mock_cached):
+        mock_cached.return_value = [
+            {
+                "vacuum_date": "2026-03-01",
+                "operation_type": "VACUUM ANALYZE",
+                "operations": "10",
+                "successful": "9",
+                "failed": "1",
+                "avg_duration_s": "2.5",
+            }
+        ]
+        resp = _get("/api/operations/vacuum?days=7")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+
+    @patch("app.backend.routers.operations.get_cached")
+    def test_vacuum_history_default_days(self, mock_cached):
+        mock_cached.return_value = []
+        resp = _get("/api/operations/vacuum")
+        assert resp.status_code == 200
+
+    @patch("app.backend.routers.operations.get_cached")
+    def test_vacuum_invalid_days(self, mock_cached):
+        resp = _get("/api/operations/vacuum?days=0")
+        assert resp.status_code == 422
+
+    @patch("app.backend.routers.operations.get_cached")
+    def test_sync_status(self, mock_cached):
+        mock_cached.return_value = [
+            {
+                "source_table": "orders",
+                "target_table": "orders_delta",
+                "source_count": "5000000",
+                "target_count": "4999850",
+                "count_drift": "150",
+                "lag_minutes": "15.0",
+                "checksum_match": "true",
+                "status": "healthy",
+                "validated_at": "2026-03-01T12:00:00",
+            }
+        ]
+        resp = _get("/api/operations/sync")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+
+    @patch("app.backend.routers.operations.get_cached")
+    def test_branch_activity(self, mock_cached):
+        mock_cached.return_value = [
+            {"event_date": "2026-03-01", "event_type": "created", "events": "5", "unique_branches": "3"}
+        ]
+        resp = _get("/api/operations/branches")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+
+    @patch("app.backend.routers.operations.get_cached")
+    def test_archival_summary(self, mock_cached):
+        mock_cached.return_value = [
+            {
+                "archive_date": "2026-03-01",
+                "source_table": "orders",
+                "total_rows_archived": "50000",
+                "total_bytes_reclaimed": "25000000",
+                "mb_reclaimed": "23.84",
+                "operations": "1",
+            }
+        ]
+        resp = _get("/api/operations/archival")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+
+
+# ---------------------------------------------------------------------------
+# Lakebase (GAP-022)
+# ---------------------------------------------------------------------------
+
+
+class TestLakebase:
+    @patch("app.backend.routers.lakebase.get_realtime_stats")
+    def test_realtime_stats(self, mock_stats):
+        mock_stats.return_value = {
+            "timestamp": 1709300000.0,
+            "connections": 15,
+            "cache_hit_ratio": 0.9988,
+            "deadlocks": 1,
+            "connection_states": {"active": 3, "idle": 10},
+        }
+        resp = _get("/api/lakebase/realtime")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "connections" in data
+        assert data["cache_hit_ratio"] > 0
+
+    @patch("app.backend.routers.lakebase.get_realtime_stats")
+    def test_realtime_stats_error(self, mock_stats):
+        mock_stats.return_value = {"error": "No Lakebase credential available"}
+        resp = _get("/api/lakebase/realtime")
+        assert resp.status_code == 200
+        assert "error" in resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Jobs (GAP-022)
+# ---------------------------------------------------------------------------
+
+
+class TestJobs:
+    @patch("app.backend.routers.jobs.get_client")
+    def test_list_jobs_no_client(self, mock_get_client):
+        mock_get_client.side_effect = Exception("no auth")
+        resp = _get("/api/jobs/list")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "error" in body
+
+    @patch("app.backend.routers.jobs.get_client")
+    def test_list_jobs_success(self, mock_get_client):
+        mock_client_obj = MagicMock()
+        mock_client_obj.jobs.get.side_effect = Exception("not found")
+        mock_get_client.return_value = mock_client_obj
+        resp = _get("/api/jobs/list")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "jobs" in body
+        # All jobs should show as not_found since mock raises
+        for job in body["jobs"]:
+            assert job["status"] == "not_found"
+
+    @patch("app.backend.routers.jobs.get_client")
+    def test_trigger_sync_no_client(self, mock_get_client):
+        mock_get_client.side_effect = Exception("no auth")
+        resp = _post("/api/jobs/sync")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "error"
+
+    @patch("app.backend.routers.jobs.get_client")
+    def test_trigger_sync_partial_success(self, mock_get_client):
+        mock_run = MagicMock()
+        mock_run.run_id = 12345
+        mock_client_obj = MagicMock()
+        mock_client_obj.jobs.run_now.return_value = mock_run
+        mock_get_client.return_value = mock_client_obj
+        resp = _post("/api/jobs/sync")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "triggered"
+        assert body["triggered_count"] == len(body["triggered"])
+
+    def test_poll_sync_status_no_ids(self):
+        resp = _get("/api/jobs/sync/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["overall"] == "no_runs"
+
+    def test_poll_sync_status_empty_string(self):
+        resp = _get("/api/jobs/sync/status?run_ids=")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["overall"] == "no_runs"

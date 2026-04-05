@@ -17,9 +17,7 @@ def create_job(key: str, definition: dict):
     for task in definition.get("tasks", []):
         nb = task.get("notebook_task", {})
         if "notebook_path" in nb:
-            nb["notebook_path"] = nb["notebook_path"].replace(
-                "/Repos/lakebase-ops", "/Workspace/Repos/lakebase-ops"
-            )
+            nb["notebook_path"] = nb["notebook_path"].replace("/Repos/lakebase-ops", "/Workspace/Repos/lakebase-ops")
 
     # Use serverless compute instead of job clusters
     for task in definition.get("tasks", []):

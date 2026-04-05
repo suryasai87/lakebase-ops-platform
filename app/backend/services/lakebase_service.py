@@ -1,8 +1,8 @@
 """Lakebase Service: Direct psycopg connection for real-time PG stats."""
 
+import logging
 import os
 import time
-import logging
 
 logger = logging.getLogger("lakebase_ops_app.lakebase")
 
@@ -31,6 +31,7 @@ def _get_db_credential() -> tuple:
     if LAKEBASE_ENDPOINT_NAME:
         try:
             from databricks.sdk import WorkspaceClient
+
             client = WorkspaceClient()
             resp = client.api_client.do(
                 "POST",
@@ -51,6 +52,7 @@ def _get_db_credential() -> tuple:
     if PROJECT_ID:
         try:
             from databricks.sdk import WorkspaceClient
+
             client = WorkspaceClient()
             resp = client.api_client.do(
                 "POST",
@@ -66,33 +68,27 @@ def _get_db_credential() -> tuple:
         except Exception as e:
             logger.warning(f"Provisioned credentials API failed: {e}")
 
-    # Method 4: Extract SP's own OAuth token from SDK headers
+    # Method 4: Generate credential via public SDK postgres API
+    # (Replaces private attribute access — uses only public SDK methods)
     try:
         from databricks.sdk import WorkspaceClient
+
         client = WorkspaceClient()
-        token = None
-        try:
-            token = client.config.token
-        except Exception:
-            pass
-        if not token:
-            try:
-                headers = client.api_client.default_headers
-                auth = headers.get("Authorization", "")
-                if auth.startswith("Bearer "):
-                    token = auth[7:]
-            except Exception:
-                pass
+        cred = client.postgres.generate_database_credential()
+        token = getattr(cred, "password", "") or getattr(cred, "token", "")
+        user = getattr(cred, "username", "databricks") or "databricks"
         if token:
-            sp_id = os.getenv("DATABRICKS_CLIENT_ID", "")
-            user = sp_id if sp_id else "databricks"
-            logger.info(f"Using SP OAuth token for Lakebase auth (user={user})")
+            logger.info("Credential obtained via public SDK postgres.generate_database_credential()")
             _credential_cache.update({"token": token, "user": user, "timestamp": now})
             return token, user
         else:
-            logger.warning("SP OAuth token: all extraction methods returned empty")
+            logger.warning("Public SDK postgres credential returned empty token")
+    except AttributeError:
+        logger.warning(
+            "SDK does not have postgres.generate_database_credential() — upgrade databricks-sdk to >= 0.81.0"
+        )
     except Exception as e:
-        logger.warning(f"SP OAuth token extraction failed: {e}")
+        logger.warning(f"Public SDK postgres credential failed: {e}")
 
     return "", "databricks"
 
@@ -109,58 +105,54 @@ def get_realtime_stats() -> dict:
 
         logger.info(f"Connecting to Lakebase: host={ENDPOINT_HOST}, user={user}")
 
-        with psycopg.connect(
-            host=ENDPOINT_HOST,
-            port=5432,
-            dbname="databricks_postgres",
-            user=user,
-            password=token,
-            sslmode="require",
-            options="-c statement_timeout=30000",
-        ) as conn:
-            with conn.cursor() as cur:
-                # pg_stat_database
-                cur.execute(
-                    "SELECT numbackends, blks_read, blks_hit, deadlocks, temp_files "
-                    "FROM pg_stat_database WHERE datname = 'databricks_postgres'"
-                )
-                row = cur.fetchone()
-                if row:
-                    stats["connections"] = row[0]
-                    blks_hit, blks_read = row[2], row[1]
-                    total = blks_hit + blks_read
-                    stats["cache_hit_ratio"] = round(blks_hit / total, 4) if total > 0 else 1.0
-                    stats["deadlocks"] = row[3]
-                    stats["temp_files"] = row[4]
+        with (
+            psycopg.connect(
+                host=ENDPOINT_HOST,
+                port=5432,
+                dbname="databricks_postgres",
+                user=user,
+                password=token,
+                sslmode="require",
+                options="-c statement_timeout=30000",
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            # pg_stat_database
+            cur.execute(
+                "SELECT numbackends, blks_read, blks_hit, deadlocks, temp_files "
+                "FROM pg_stat_database WHERE datname = 'databricks_postgres'"
+            )
+            row = cur.fetchone()
+            if row:
+                stats["connections"] = row[0]
+                blks_hit, blks_read = row[2], row[1]
+                total = blks_hit + blks_read
+                stats["cache_hit_ratio"] = round(blks_hit / total, 4) if total > 0 else 1.0
+                stats["deadlocks"] = row[3]
+                stats["temp_files"] = row[4]
 
-                # pg_stat_activity summary
-                cur.execute(
-                    "SELECT state, count(*) FROM pg_stat_activity "
-                    "WHERE backend_type = 'client backend' GROUP BY state"
-                )
-                stats["connection_states"] = {
-                    (r[0] or "null"): r[1] for r in cur.fetchall()
-                }
+            # pg_stat_activity summary
+            cur.execute(
+                "SELECT state, count(*) FROM pg_stat_activity WHERE backend_type = 'client backend' GROUP BY state"
+            )
+            stats["connection_states"] = {(r[0] or "null"): r[1] for r in cur.fetchall()}
 
-                # pg_stat_wal
-                try:
-                    cur.execute("SELECT wal_bytes, wal_buffers_full FROM pg_stat_wal")
-                    wal = cur.fetchone()
-                    if wal:
-                        stats["wal_bytes"] = wal[0]
-                        stats["wal_buffers_full"] = wal[1]
-                except Exception:
-                    stats["wal_bytes"] = 0
-                    stats["wal_buffers_full"] = 0
+            # pg_stat_wal
+            try:
+                cur.execute("SELECT wal_bytes, wal_buffers_full FROM pg_stat_wal")
+                wal = cur.fetchone()
+                if wal:
+                    stats["wal_bytes"] = wal[0]
+                    stats["wal_buffers_full"] = wal[1]
+            except Exception:
+                stats["wal_bytes"] = 0
+                stats["wal_buffers_full"] = 0
 
-                # Top dead tuple tables
-                cur.execute(
-                    "SELECT relname, n_dead_tup, n_live_tup "
-                    "FROM pg_stat_user_tables ORDER BY n_dead_tup DESC LIMIT 5"
-                )
-                stats["top_dead_tuple_tables"] = [
-                    {"table": r[0], "dead": r[1], "live": r[2]} for r in cur.fetchall()
-                ]
+            # Top dead tuple tables
+            cur.execute(
+                "SELECT relname, n_dead_tup, n_live_tup FROM pg_stat_user_tables ORDER BY n_dead_tup DESC LIMIT 5"
+            )
+            stats["top_dead_tuple_tables"] = [{"table": r[0], "dead": r[1], "live": r[2]} for r in cur.fetchall()]
 
     except Exception as e:
         logger.error(f"Lakebase connection failed: {e}")

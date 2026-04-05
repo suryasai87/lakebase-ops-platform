@@ -12,10 +12,11 @@ import logging
 import time
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any
 
 logger = logging.getLogger("lakebase_ops")
 
@@ -45,13 +46,14 @@ class EventType(Enum):
 @dataclass
 class TaskResult:
     """Result of an agent tool execution."""
+
     task_id: str
     agent_name: str
     tool_name: str
     status: TaskStatus
     message: str
     data: dict = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     duration_seconds: float = 0.0
 
     def __str__(self):
@@ -61,10 +63,11 @@ class TaskResult:
 @dataclass
 class AgentTool:
     """Registered tool (method) within an agent."""
+
     name: str
     description: str
     handler: Callable
-    schedule: Optional[str] = None  # Cron expression
+    schedule: str | None = None  # Cron expression
     risk_level: str = "low"  # low, medium, high
     requires_approval: bool = False
 
@@ -72,10 +75,11 @@ class AgentTool:
 @dataclass
 class Event:
     """Inter-agent event for coordination."""
+
     event_type: EventType
     source_agent: str
     data: dict = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 class BaseAgent(ABC):
@@ -85,7 +89,7 @@ class BaseAgent(ABC):
         self.name = name
         self.description = description
         self.tools: dict[str, AgentTool] = {}
-        self._framework: Optional[AgentFramework] = None
+        self._framework: AgentFramework | None = None
         self._results: list[TaskResult] = []
 
     def register_tool(
@@ -93,7 +97,7 @@ class BaseAgent(ABC):
         name: str,
         handler: Callable,
         description: str = "",
-        schedule: Optional[str] = None,
+        schedule: str | None = None,
         risk_level: str = "low",
         requires_approval: bool = False,
     ) -> None:
@@ -150,7 +154,7 @@ class BaseAgent(ABC):
                 agent_name=self.name,
                 tool_name=tool_name,
                 status=TaskStatus.FAILED,
-                message=f"Failed: {str(e)}",
+                message=f"Failed: {e!s}",
                 duration_seconds=duration,
             )
 
@@ -158,7 +162,7 @@ class BaseAgent(ABC):
         logger.info(str(result))
         return result
 
-    def emit_event(self, event_type: EventType, data: dict = None) -> None:
+    def emit_event(self, event_type: EventType, data: dict | None = None) -> None:
         """Emit an event for other agents to consume."""
         if self._framework:
             event = Event(
@@ -174,7 +178,7 @@ class BaseAgent(ABC):
         pass
 
     @abstractmethod
-    async def run_cycle(self, context: dict = None) -> list[TaskResult]:
+    async def run_cycle(self, context: dict | None = None) -> list[TaskResult]:
         """Execute one full automation cycle. Must be implemented by subclasses."""
         pass
 
@@ -249,7 +253,7 @@ class AgentFramework:
         """Set a value in shared state."""
         self._shared_state[key] = value
 
-    async def run_full_cycle(self, context: dict = None) -> dict:
+    async def run_full_cycle(self, context: dict | None = None) -> dict:
         """
         Execute a complete automation cycle across all agents.
 
@@ -304,7 +308,5 @@ class AgentFramework:
             "results": all_results,
             "duration_seconds": cycle_duration,
             "events": len(self._event_log),
-            "agent_summaries": {
-                name: agent.get_results_summary() for name, agent in self.agents.items()
-            },
+            "agent_summaries": {name: agent.get_results_summary() for name, agent in self.agents.items()},
         }

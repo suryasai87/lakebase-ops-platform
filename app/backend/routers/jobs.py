@@ -5,6 +5,7 @@ import logging
 import os
 
 from fastapi import APIRouter
+
 from ..services.sql_service import get_client
 
 logger = logging.getLogger("lakebase_ops_app.jobs")
@@ -37,20 +38,24 @@ def list_jobs():
         client = get_client()
         for key, info in LAKEBASE_JOBS.items():
             try:
-                job = client.jobs.get(info["job_id"])
-                results.append({
-                    "key": key,
-                    "job_id": info["job_id"],
-                    "name": info["name"],
-                    "status": "configured",
-                })
+                client.jobs.get(info["job_id"])
+                results.append(
+                    {
+                        "key": key,
+                        "job_id": info["job_id"],
+                        "name": info["name"],
+                        "status": "configured",
+                    }
+                )
             except Exception:
-                results.append({
-                    "key": key,
-                    "job_id": info["job_id"],
-                    "name": info["name"],
-                    "status": "not_found",
-                })
+                results.append(
+                    {
+                        "key": key,
+                        "job_id": info["job_id"],
+                        "name": info["name"],
+                        "status": "not_found",
+                    }
+                )
     except Exception as e:
         logger.error(f"Failed to list jobs: {e}")
         return {"error": str(e), "jobs": []}
@@ -67,19 +72,23 @@ def trigger_sync():
         for key, info in LAKEBASE_JOBS.items():
             try:
                 run = client.jobs.run_now(info["job_id"])
-                triggered.append({
-                    "key": key,
-                    "name": info["name"],
-                    "job_id": info["job_id"],
-                    "run_id": run.run_id,
-                })
+                triggered.append(
+                    {
+                        "key": key,
+                        "name": info["name"],
+                        "job_id": info["job_id"],
+                        "run_id": run.run_id,
+                    }
+                )
                 logger.info(f"Triggered {info['name']}: run_id={run.run_id}")
             except Exception as e:
-                errors.append({
-                    "key": key,
-                    "name": info["name"],
-                    "error": str(e),
-                })
+                errors.append(
+                    {
+                        "key": key,
+                        "name": info["name"],
+                        "error": str(e),
+                    }
+                )
                 logger.warning(f"Failed to trigger {info['name']}: {e}")
     except Exception as e:
         return {"status": "error", "error": str(e), "triggered": [], "errors": []}
@@ -126,26 +135,27 @@ def poll_sync_status(run_ids: str = ""):
 
                 # Find job name from run
                 job_id = run.job_id
-                job_name = next(
-                    (v["name"] for v in LAKEBASE_JOBS.values() if v["job_id"] == job_id),
-                    f"Job {job_id}"
-                )
+                job_name = next((v["name"] for v in LAKEBASE_JOBS.values() if v["job_id"] == job_id), f"Job {job_id}")
 
-                runs.append({
-                    "run_id": run_id,
-                    "job_id": job_id,
-                    "name": job_name,
-                    "status": simple,
-                    "life_cycle_state": life_cycle,
-                    "result_state": result_state,
-                    "message": state_message[:200] if state_message else "",
-                })
+                runs.append(
+                    {
+                        "run_id": run_id,
+                        "job_id": job_id,
+                        "name": job_name,
+                        "status": simple,
+                        "life_cycle_state": life_cycle,
+                        "result_state": result_state,
+                        "message": state_message[:200] if state_message else "",
+                    }
+                )
             except Exception as e:
-                runs.append({
-                    "run_id": run_id,
-                    "status": "error",
-                    "message": str(e)[:200],
-                })
+                runs.append(
+                    {
+                        "run_id": run_id,
+                        "status": "error",
+                        "message": str(e)[:200],
+                    }
+                )
     except Exception as e:
         return {"runs": [], "overall": "error", "error": str(e)}
 

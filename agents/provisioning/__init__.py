@@ -1,4 +1,4 @@
 from .agent import ProvisioningAgent
 from .assessment import AssessmentMixin
 
-__all__ = ["ProvisioningAgent", "AssessmentMixin"]
+__all__ = ["AssessmentMixin", "ProvisioningAgent"]

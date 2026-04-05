@@ -8,6 +8,8 @@ import Agents from "./pages/Agents";
 import Performance from "./pages/Performance";
 import Indexes from "./pages/Indexes";
 import Operations from "./pages/Operations";
+import Branches from "./pages/Branches";
+import AdoptionMetrics from "./pages/AdoptionMetrics";
 import LiveStats from "./pages/LiveStats";
 import Assessment from "./pages/Assessment";
 import NotFound from "./pages/NotFound";
@@ -35,6 +37,8 @@ export default function App() {
               <Route path="/performance" element={<Performance />} />
               <Route path="/indexes" element={<Indexes />} />
               <Route path="/operations" element={<Operations />} />
+              <Route path="/branches" element={<Branches />} />
+              <Route path="/adoption" element={<AdoptionMetrics />} />
               <Route path="/live" element={<LiveStats />} />
               <Route path="/assessment" element={<Assessment />} />
               <Route path="*" element={<NotFound />} />

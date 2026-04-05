@@ -4,10 +4,8 @@ Centralized settings for all agents, jobs, and utilities.
 """
 
 import os
-
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 
 class Environment(Enum):
@@ -33,21 +31,16 @@ class BranchingPattern(Enum):
     MULTI_TENANT_SCHEMA = "multi_tenant_schema"
 
 
-class AlertSeverity(Enum):
-    INFO = "info"
-    WARNING = "warning"
-    CRITICAL = "critical"
-
-
 class RemediationRisk(Enum):
-    LOW = "low"      # Auto-execute: vacuum, idle connection kill
-    MEDIUM = "medium" # Requires approval: index drop, parameter change
-    HIGH = "high"     # Human only: VACUUM FULL, schema migration to prod
+    LOW = "low"  # Auto-execute: vacuum, idle connection kill
+    MEDIUM = "medium"  # Requires approval: index drop, parameter change
+    HIGH = "high"  # Human only: VACUUM FULL, schema migration to prod
 
 
 @dataclass
 class LakebaseProjectConfig:
     """Configuration for a Lakebase project."""
+
     project_name: str
     domain: str
     environment: Environment
@@ -62,27 +55,28 @@ class LakebaseProjectConfig:
 @dataclass
 class BranchConfig:
     """Configuration for a Lakebase branch."""
+
     name: str
     branch_type: BranchType
     source_branch: str = "production"
-    ttl_seconds: Optional[int] = None
+    ttl_seconds: int | None = None
     is_protected: bool = False
-    auto_archive_idle_hours: Optional[int] = None
+    auto_archive_idle_hours: int | None = None
 
 
 # Default TTL policies (from Enterprise Design Guide)
 TTL_POLICIES = {
-    "ci": 14400,          # 4 hours
-    "hotfix": 86400,      # 24 hours
-    "perf": 172800,       # 48 hours
-    "feat": 604800,       # 7 days
-    "dev": 604800,        # 7 days
-    "demo": 1209600,      # 14 days
-    "qa": 1209600,        # 14 days
-    "audit": 2592000,     # 30 days
-    "ai-agent": 3600,     # 1 hour
-    "production": None,   # No TTL (protected)
-    "staging": None,      # No TTL (protected)
+    "ci": 14400,  # 4 hours
+    "hotfix": 86400,  # 24 hours
+    "perf": 172800,  # 48 hours
+    "feat": 604800,  # 7 days
+    "dev": 604800,  # 7 days
+    "demo": 1209600,  # 14 days
+    "qa": 1209600,  # 14 days
+    "audit": 2592000,  # 30 days
+    "ai-agent": 3600,  # 1 hour
+    "production": None,  # No TTL (protected)
+    "staging": None,  # No TTL (protected)
 }
 
 # Branch naming conventions (RFC 1123 compliant)
@@ -102,6 +96,7 @@ BRANCH_NAMING = {
 @dataclass
 class AlertThresholds:
     """Performance alerting thresholds from PRD FR-04."""
+
     # Buffer cache hit ratio
     cache_hit_warning: float = 0.99
     cache_hit_critical: float = 0.95
@@ -131,6 +126,7 @@ class AlertThresholds:
 @dataclass
 class SyncValidationConfig:
     """Configuration for OLTP-to-OLAP sync validation."""
+
     source_table: str
     target_delta_table: str
     timestamp_column: str = "updated_at"
@@ -143,6 +139,7 @@ class SyncValidationConfig:
 @dataclass
 class ColdDataPolicy:
     """Policy for cold data archival (FR-07)."""
+
     table_name: str
     schema_name: str = "public"
     cold_threshold_days: int = 90
@@ -155,11 +152,12 @@ class ColdDataPolicy:
 @dataclass
 class IndexRecommendation:
     """Structure for index recommendations (FR-02)."""
+
     table_name: str
     schema_name: str
     recommendation_type: str  # "drop_unused", "reindex_bloated", "create_missing", "drop_duplicate"
-    index_name: Optional[str] = None
-    suggested_columns: Optional[list] = None
+    index_name: str | None = None
+    suggested_columns: list | None = None
     confidence: str = "medium"  # "high", "medium", "low"
     estimated_impact: str = ""
     ddl_statement: str = ""
@@ -197,17 +195,18 @@ DELTA_TABLES = {
     "branch_lifecycle": f"{OPS_CATALOG}.{OPS_SCHEMA}.branch_lifecycle",
     "data_archival": f"{OPS_CATALOG}.{OPS_SCHEMA}.data_archival_history",
     "migration_assessments": f"{OPS_CATALOG}.{OPS_SCHEMA}.migration_assessments",
+    "lakehouse_sync_status": f"{OPS_CATALOG}.{OPS_SCHEMA}.lakehouse_sync_status",
 }
 
 # Job schedules
 JOB_SCHEDULES = {
-    "metric_collector": "*/5 * * * *",     # Every 5 minutes
-    "index_analyzer": "0 * * * *",          # Every hour
-    "vacuum_scheduler": "0 2 * * *",        # Daily at 2 AM
-    "sync_validator": "*/15 * * * *",       # Every 15 minutes
-    "branch_manager": "0 */6 * * *",        # Every 6 hours
-    "cold_archiver": "0 3 * * 0",           # Weekly Sunday 3 AM
-    "cost_tracker": "0 6 * * *",            # Daily 6 AM
+    "metric_collector": "*/5 * * * *",  # Every 5 minutes
+    "index_analyzer": "0 * * * *",  # Every hour
+    "vacuum_scheduler": "0 2 * * *",  # Daily at 2 AM
+    "sync_validator": "*/15 * * * *",  # Every 15 minutes
+    "branch_manager": "0 */6 * * *",  # Every 6 hours
+    "cold_archiver": "0 3 * * 0",  # Weekly Sunday 3 AM
+    "cost_tracker": "0 6 * * *",  # Daily 6 AM
 }
 
 # Lakebase infrastructure (configure via environment variables)

@@ -2,7 +2,8 @@
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -21,9 +22,9 @@ def _get_agent():
     if _agent is None:
         try:
             from agents import ProvisioningAgent
-            from utils.lakebase_client import LakebaseClient
-            from utils.delta_writer import DeltaWriter
             from utils.alerting import AlertManager
+            from utils.delta_writer import DeltaWriter
+            from utils.lakebase_client import LakebaseClient
 
             client = LakebaseClient(workspace_host="", mock_mode=True)
             writer = DeltaWriter(mock_mode=True)
@@ -31,7 +32,7 @@ def _get_agent():
             _agent = ProvisioningAgent(client, writer, alerter)
         except Exception as e:
             logger.error(f"Failed to initialize ProvisioningAgent: {e}")
-            raise HTTPException(status_code=500, detail="Assessment agent initialization failed")
+            raise HTTPException(status_code=500, detail="Assessment agent initialization failed") from e
     return _agent
 
 
@@ -201,6 +202,10 @@ def generate_blueprint(req: BlueprintRequest):
         workload_data=cached if cached else None,
     )
 
+    # Store blueprint result back into profile cache so timeline/cost endpoints work
+    if req.profile_id:
+        _profiles.set(req.profile_id, {**cached, **result})
+
     raw_phases = result.get("phases", [])
     phases = [
         {
@@ -239,13 +244,15 @@ def assessment_timeline(profile_id: str):
     phases = []
     cumulative_day = 0
     for p in blueprint_obj.phases:
-        phases.append({
-            "phase": p.phase_number,
-            "name": p.name,
-            "start_day": cumulative_day,
-            "duration_days": p.estimated_days,
-            "end_day": cumulative_day + p.estimated_days,
-        })
+        phases.append(
+            {
+                "phase": p.phase_number,
+                "name": p.name,
+                "start_day": cumulative_day,
+                "duration_days": p.estimated_days,
+                "end_day": cumulative_day + p.estimated_days,
+            }
+        )
         cumulative_day += p.estimated_days
 
     return {
@@ -271,39 +278,49 @@ def assessment_extension_matrix(profile_id: str):
     db = profile_obj.databases[0]
     engine = profile_obj.source_engine.value
     from config.migration_profiles import ENGINE_KIND
+
     is_nosql = ENGINE_KIND.get(engine) == "nosql"
 
     matrix = []
 
     if is_nosql:
         from utils.readiness_scorer import DYNAMODB_FEATURE_SUPPORT, DYNAMODB_FEATURE_WORKAROUNDS
+
         for feature, status in DYNAMODB_FEATURE_SUPPORT.items():
             workaround = DYNAMODB_FEATURE_WORKAROUNDS.get(feature, "")
-            matrix.append({
-                "name": feature,
-                "version": "",
-                "status": status,
-                "workaround": workaround,
-            })
+            matrix.append(
+                {
+                    "name": feature,
+                    "version": "",
+                    "status": status,
+                    "workaround": workaround,
+                }
+            )
     else:
-        from utils.readiness_scorer import LAKEBASE_SUPPORTED_EXTENSIONS, EXTENSION_WORKAROUNDS
+        from utils.readiness_scorer import EXTENSION_WORKAROUNDS, LAKEBASE_SUPPORTED_EXTENSIONS
+
         for ext in db.extensions:
             name = ext.name.lower()
             supported = name in LAKEBASE_SUPPORTED_EXTENSIONS
             workaround = EXTENSION_WORKAROUNDS.get(name, "")
             status = "supported" if supported else ("workaround" if workaround else "unsupported")
-            matrix.append({
-                "name": ext.name,
-                "version": ext.version,
-                "status": status,
-                "workaround": workaround,
-            })
+            matrix.append(
+                {
+                    "name": ext.name,
+                    "version": ext.version,
+                    "status": status,
+                    "workaround": workaround,
+                }
+            )
 
     return {
         "profile_id": profile_id,
         "database": db.name,
         "matrix_type": "feature" if is_nosql else "extension",
-        "extensions": sorted(matrix, key=lambda e: (0 if e["status"] == "supported" else 1 if e["status"] == "workaround" else 2, e["name"])),
+        "extensions": sorted(
+            matrix,
+            key=lambda e: (0 if e["status"] == "supported" else 1 if e["status"] == "workaround" else 2, e["name"]),
+        ),
         "summary": {
             "supported": sum(1 for e in matrix if e["status"] == "supported"),
             "workaround": sum(1 for e in matrix if e["status"] == "workaround"),
@@ -315,7 +332,8 @@ def assessment_extension_matrix(profile_id: str):
 @router.get("/regions/{engine}", operation_id="assessment_regions")
 def assessment_regions(engine: str):
     """Return available regions for a source engine's cloud provider."""
-    from config.pricing import get_regions_for_engine, ENGINE_CLOUD_MAP
+    from config.pricing import ENGINE_CLOUD_MAP, get_regions_for_engine
+
     cloud = ENGINE_CLOUD_MAP.get(engine, "aws")
     regions = get_regions_for_engine(engine)
     return {"engine": engine, "cloud": cloud, "regions": regions}
@@ -325,13 +343,13 @@ def assessment_regions(engine: str):
 def assessment_cost_estimate(profile_id: str):
     """Estimate monthly cost: source cloud DB vs Lakebase DBU pricing."""
     from config.pricing import (
-        SOURCE_ENGINES,
+        HOURS_PER_MONTH,
         LAKEBASE_PRICING,
         PRICING_DISCLAIMER,
         PRICING_VERSION,
-        HOURS_PER_MONTH,
-        get_source_rates,
+        SOURCE_ENGINES,
         get_lakebase_rates,
+        get_source_rates,
     )
 
     cached = _profiles.get(profile_id)
@@ -359,11 +377,7 @@ def assessment_cost_estimate(profile_id: str):
 
     source_compute = src_rates["compute_per_hour"] * HOURS_PER_MONTH
     source_storage = src_rates["storage_per_gb_month"] * size_gb
-    source_io = (
-        src_rates["io_per_million"] * (avg_qps * 2_592_000 / 1_000_000)
-        if src_rates["io_per_million"]
-        else 0
-    )
+    source_io = src_rates["io_per_million"] * (avg_qps * 2_592_000 / 1_000_000) if src_rates["io_per_million"] else 0
     source_total = source_compute + source_storage + source_io
 
     lakebase_dbu_per_hour = cu_estimate * 2
@@ -426,7 +440,7 @@ def _record_history(profile_id: str, cached: dict, blueprint_resp: dict):
         "strategy": blueprint_resp.get("strategy"),
         "total_effort_days": blueprint_resp.get("total_effort_days"),
         "risk_level": blueprint_resp.get("risk_level"),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
     _assessment_history.append(entry)
     if len(_assessment_history) > _MAX_HISTORY:

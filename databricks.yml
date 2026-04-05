@@ -1,0 +1,272 @@
+# Databricks Asset Bundles configuration for LakebaseOps Platform
+# Deploy: databricks bundle deploy -t <target>
+# Docs: https://docs.databricks.com/dev-tools/bundles/
+
+bundle:
+  name: lakebase-ops-platform
+
+variables:
+  project_id:
+    description: "Lakebase project UUID"
+    default: ""
+  endpoint_host:
+    description: "Lakebase PostgreSQL endpoint hostname"
+    default: ""
+  ops_catalog:
+    description: "Unity Catalog catalog for operational tables"
+    default: "ops_catalog"
+  ops_schema:
+    description: "Schema for operational Delta tables"
+    default: "lakebase_ops"
+  archive_schema:
+    description: "Schema for archived cold data"
+    default: "lakebase_archive"
+  warehouse_id:
+    description: "SQL Warehouse ID for DDL/DML execution"
+    default: ""
+  notification_email:
+    description: "Email for job failure notifications"
+    default: ""
+
+workspace:
+  root_path: /Workspace/Users/${workspace.current_user.userName}/lakebase-ops-platform
+
+resources:
+  # ---------------------------------------------------------------------------
+  # Databricks App
+  # ---------------------------------------------------------------------------
+  apps:
+    lakebase-ops-v2:
+      name: "lakebase-ops-v2"
+      description: "LakebaseOps Monitoring & Management Dashboard v2"
+      source_code_path: ./app
+
+  # ---------------------------------------------------------------------------
+  # Scheduled Jobs (replacing pg_cron)
+  # ---------------------------------------------------------------------------
+  jobs:
+    metric_collector:
+      name: "LakebaseOps - Metric Collector"
+      description: "Persists pg_stat_statements and health metrics to Delta (FR-01, FR-04)"
+      tags:
+        team: lakebase-ops
+        component: metric-collector
+      schedule:
+        quartz_cron_expression: "0 */5 * * * ?"
+        timezone_id: "UTC"
+      max_concurrent_runs: 1
+      timeout_seconds: 300
+      tasks:
+        - task_key: collect_metrics
+          notebook_task:
+            notebook_path: ./jobs/metric_collector_notebook.py
+            base_parameters:
+              project_id: ${var.project_id}
+              branches: "production,staging"
+          environment_key: lakebase_ops_env
+      environments:
+        - environment_key: lakebase_ops_env
+          spec:
+            client: "1"
+            dependencies:
+              - psycopg[binary]>=3.0
+              - databricks-sdk>=0.81.0
+
+    index_analyzer:
+      name: "LakebaseOps - Index Analyzer"
+      description: "Analyzes index health and generates recommendations (FR-02)"
+      tags:
+        team: lakebase-ops
+        component: index-analyzer
+      schedule:
+        quartz_cron_expression: "0 0 * * * ?"
+        timezone_id: "UTC"
+      max_concurrent_runs: 1
+      timeout_seconds: 600
+      tasks:
+        - task_key: analyze_indexes
+          notebook_task:
+            notebook_path: ./jobs/index_analyzer_notebook.py
+            base_parameters:
+              project_id: ${var.project_id}
+              branch_id: "production"
+          environment_key: lakebase_ops_env
+      environments:
+        - environment_key: lakebase_ops_env
+          spec:
+            client: "1"
+            dependencies:
+              - psycopg[binary]>=3.0
+              - databricks-sdk>=0.81.0
+
+    vacuum_scheduler:
+      name: "LakebaseOps - Vacuum Scheduler"
+      description: "Scheduled VACUUM ANALYZE replacing pg_cron (FR-03)"
+      tags:
+        team: lakebase-ops
+        component: vacuum-scheduler
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"
+        timezone_id: "UTC"
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+      tasks:
+        - task_key: vacuum_tables
+          notebook_task:
+            notebook_path: ./jobs/vacuum_scheduler_notebook.py
+            base_parameters:
+              project_id: ${var.project_id}
+              branch_id: "production"
+          environment_key: lakebase_ops_env
+      environments:
+        - environment_key: lakebase_ops_env
+          spec:
+            client: "1"
+            dependencies:
+              - psycopg[binary]>=3.0
+              - databricks-sdk>=0.81.0
+
+    sync_validator:
+      name: "LakebaseOps - Sync Validator"
+      description: "Validates OLTP-to-OLAP sync completeness and freshness (FR-05)"
+      tags:
+        team: lakebase-ops
+        component: sync-validator
+      schedule:
+        quartz_cron_expression: "0 */15 * * * ?"
+        timezone_id: "UTC"
+      max_concurrent_runs: 1
+      timeout_seconds: 300
+      tasks:
+        - task_key: validate_sync
+          notebook_task:
+            notebook_path: ./jobs/sync_validator_notebook.py
+            base_parameters:
+              project_id: ${var.project_id}
+              branch_id: "production"
+          environment_key: lakebase_ops_env
+      environments:
+        - environment_key: lakebase_ops_env
+          spec:
+            client: "1"
+            dependencies:
+              - psycopg[binary]>=3.0
+              - databricks-sdk>=0.81.0
+
+    branch_manager:
+      name: "LakebaseOps - Branch Manager"
+      description: "Enforces TTL policies and monitors branch counts (FR-06)"
+      tags:
+        team: lakebase-ops
+        component: branch-manager
+      schedule:
+        quartz_cron_expression: "0 0 */6 * * ?"
+        timezone_id: "UTC"
+      max_concurrent_runs: 1
+      timeout_seconds: 600
+      tasks:
+        - task_key: enforce_ttl
+          notebook_task:
+            notebook_path: ./jobs/branch_manager_notebook.py
+            base_parameters:
+              action: "enforce_ttl"
+          environment_key: lakebase_ops_env
+        - task_key: reset_staging
+          notebook_task:
+            notebook_path: ./jobs/branch_manager_notebook.py
+            base_parameters:
+              action: "reset_staging"
+          environment_key: lakebase_ops_env
+          depends_on:
+            - task_key: enforce_ttl
+      environments:
+        - environment_key: lakebase_ops_env
+          spec:
+            client: "1"
+            dependencies:
+              - psycopg[binary]>=3.0
+              - databricks-sdk>=0.81.0
+
+    cold_archiver:
+      name: "LakebaseOps - Cold Data Archiver"
+      description: "Archives cold data from Lakebase to Delta Lake (FR-07)"
+      tags:
+        team: lakebase-ops
+        component: cold-archiver
+      schedule:
+        quartz_cron_expression: "0 0 3 ? * SUN"
+        timezone_id: "UTC"
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      tasks:
+        - task_key: archive_cold_data
+          notebook_task:
+            notebook_path: ./jobs/cold_archiver_notebook.py
+            base_parameters:
+              project_id: ${var.project_id}
+              branch_id: "production"
+              cold_threshold_days: "90"
+          environment_key: lakebase_ops_env
+      environments:
+        - environment_key: lakebase_ops_env
+          spec:
+            client: "1"
+            dependencies:
+              - psycopg[binary]>=3.0
+              - databricks-sdk>=0.81.0
+
+    cost_tracker:
+      name: "LakebaseOps - Cost Tracker"
+      description: "Tracks Lakebase costs from system.billing.usage (UC-11)"
+      tags:
+        team: lakebase-ops
+        component: cost-tracker
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: "UTC"
+      max_concurrent_runs: 1
+      timeout_seconds: 600
+      tasks:
+        - task_key: track_costs
+          notebook_task:
+            notebook_path: ./jobs/cost_tracker_notebook.py
+          environment_key: lakebase_ops_env
+      environments:
+        - environment_key: lakebase_ops_env
+          spec:
+            client: "1"
+            dependencies:
+              - psycopg[binary]>=3.0
+              - databricks-sdk>=0.81.0
+
+# =============================================================================
+# Deployment Targets (GAP-031: Environment separation)
+# =============================================================================
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      host: https://fe-vm-hls-amer.cloud.databricks.com
+    variables:
+      ops_catalog: dev_ops_catalog
+      ops_schema: lakebase_ops_dev
+      archive_schema: lakebase_archive_dev
+
+  staging:
+    workspace:
+      host: https://fe-vm-hls-amer-staging.cloud.databricks.com
+    variables:
+      ops_catalog: staging_ops_catalog
+      ops_schema: lakebase_ops_staging
+      archive_schema: lakebase_archive_staging
+
+  prod:
+    workspace:
+      host: https://fe-vm-hls-amer.cloud.databricks.com
+    variables:
+      ops_catalog: ops_catalog
+      ops_schema: lakebase_ops
+      archive_schema: lakebase_archive
+    run_as:
+      service_principal_name: "lakebase-ops-sp"

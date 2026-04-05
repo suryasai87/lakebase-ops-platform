@@ -20,34 +20,26 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config.migration_profiles import (
-    ENGINE_KIND,
-    AssessmentResult,
     BlockerSeverity,
     DatabaseProfile,
     ExtensionInfo,
     FunctionInfo,
     LakebaseTier,
-    MigrationBlueprint,
     MigrationProfile,
     MigrationStrategy,
     ReadinessCategory,
     SourceEngine,
-    TableProfile,
-    TriggerInfo,
     WorkloadProfile,
 )
+from utils.blueprint_generator import generate_blueprint, render_blueprint_markdown
 from utils.readiness_scorer import (
     compute_readiness_score,
-    LAKEBASE_SUPPORTED_EXTENSIONS,
-    DYNAMODB_FEATURE_SUPPORT,
-    DYNAMODB_FEATURE_WORKAROUNDS,
 )
-from utils.blueprint_generator import generate_blueprint, render_blueprint_markdown
-
 
 # =============================================================================
 # Test Helpers
 # =============================================================================
+
 
 class _TestReport:
     def __init__(self):
@@ -79,6 +71,7 @@ def report():
 # =============================================================================
 # Test: Migration Profile Dataclasses
 # =============================================================================
+
 
 def test_dataclasses(report: _TestReport):
     print("\n--- Migration Profile Dataclasses ---")
@@ -113,6 +106,7 @@ def test_dataclasses(report: _TestReport):
 # =============================================================================
 # Test: Readiness Scoring Engine
 # =============================================================================
+
 
 def test_readiness_scorer(report: _TestReport):
     print("\n--- Readiness Scoring Engine ---")
@@ -200,8 +194,13 @@ def test_readiness_scorer(report: _TestReport):
 
     # Test 4: High QPS -> performance blocker
     normal_db = DatabaseProfile(
-        name="high_qps_db", size_bytes=1_000_000_000, size_gb=0.93,
-        table_count=5, extensions=[], functions=[], triggers=[],
+        name="high_qps_db",
+        size_bytes=1_000_000_000,
+        size_gb=0.93,
+        table_count=5,
+        extensions=[],
+        functions=[],
+        triggers=[],
     )
     high_qps_workload = WorkloadProfile(avg_qps=150_000, avg_tps=200, connection_count_peak=100)
     result4 = compute_readiness_score(normal_db, high_qps_workload)
@@ -213,9 +212,15 @@ def test_readiness_scorer(report: _TestReport):
 
     # Test 5: Logical replication -> HIGH severity
     repl_db = DatabaseProfile(
-        name="repl_db", size_bytes=5_000_000_000, size_gb=4.65,
-        table_count=15, extensions=[], functions=[], triggers=[],
-        has_logical_replication=True, replication_slots=["sub_analytics"],
+        name="repl_db",
+        size_bytes=5_000_000_000,
+        size_gb=4.65,
+        table_count=15,
+        extensions=[],
+        functions=[],
+        triggers=[],
+        has_logical_replication=True,
+        replication_slots=["sub_analytics"],
     )
     result5 = compute_readiness_score(repl_db)
     report.add(
@@ -226,8 +231,12 @@ def test_readiness_scorer(report: _TestReport):
 
     # Test 6: Heavy PL/pgSQL -> complexity blocker
     plpgsql_db = DatabaseProfile(
-        name="plpgsql_db", size_bytes=5_000_000_000, size_gb=4.65,
-        table_count=20, extensions=[], triggers=[],
+        name="plpgsql_db",
+        size_bytes=5_000_000_000,
+        size_gb=4.65,
+        table_count=20,
+        extensions=[],
+        triggers=[],
         functions=[FunctionInfo("public", f"fn_{i}", "plpgsql", False, 50) for i in range(60)],
     )
     result6 = compute_readiness_score(plpgsql_db)
@@ -258,8 +267,13 @@ def test_readiness_scorer(report: _TestReport):
 
     # Test 9: Event triggers -> BLOCKER
     evt_db = DatabaseProfile(
-        name="evt_db", size_bytes=1_000_000_000, size_gb=0.93,
-        table_count=5, extensions=[], functions=[], triggers=[],
+        name="evt_db",
+        size_bytes=1_000_000_000,
+        size_gb=0.93,
+        table_count=5,
+        extensions=[],
+        functions=[],
+        triggers=[],
         event_trigger_count=2,
     )
     result_evt = compute_readiness_score(evt_db)
@@ -271,8 +285,13 @@ def test_readiness_scorer(report: _TestReport):
 
     # Test 10: Large objects -> warning
     lo_db = DatabaseProfile(
-        name="lo_db", size_bytes=1_000_000_000, size_gb=0.93,
-        table_count=5, extensions=[], functions=[], triggers=[],
+        name="lo_db",
+        size_bytes=1_000_000_000,
+        size_gb=0.93,
+        table_count=5,
+        extensions=[],
+        functions=[],
+        triggers=[],
         large_object_count=15,
     )
     result_lo = compute_readiness_score(lo_db)
@@ -284,8 +303,13 @@ def test_readiness_scorer(report: _TestReport):
 
     # Test 11: Custom aggregates -> warning (info)
     agg_db = DatabaseProfile(
-        name="agg_db", size_bytes=1_000_000_000, size_gb=0.93,
-        table_count=5, extensions=[], functions=[], triggers=[],
+        name="agg_db",
+        size_bytes=1_000_000_000,
+        size_gb=0.93,
+        table_count=5,
+        extensions=[],
+        functions=[],
+        triggers=[],
         custom_aggregate_count=3,
     )
     result_agg = compute_readiness_score(agg_db)
@@ -297,8 +321,13 @@ def test_readiness_scorer(report: _TestReport):
 
     # Test 12: Exclusion constraints -> warning
     excl_db = DatabaseProfile(
-        name="excl_db", size_bytes=1_000_000_000, size_gb=0.93,
-        table_count=5, extensions=[], functions=[], triggers=[],
+        name="excl_db",
+        size_bytes=1_000_000_000,
+        size_gb=0.93,
+        table_count=5,
+        extensions=[],
+        functions=[],
+        triggers=[],
         exclusion_constraint_count=2,
     )
     result_excl = compute_readiness_score(excl_db)
@@ -310,8 +339,13 @@ def test_readiness_scorer(report: _TestReport):
 
     # Test 13: RLS policies -> warning (info)
     rls_db = DatabaseProfile(
-        name="rls_db", size_bytes=1_000_000_000, size_gb=0.93,
-        table_count=5, extensions=[], functions=[], triggers=[],
+        name="rls_db",
+        size_bytes=1_000_000_000,
+        size_gb=0.93,
+        table_count=5,
+        extensions=[],
+        functions=[],
+        triggers=[],
         rls_policy_count=4,
     )
     result_rls = compute_readiness_score(rls_db)
@@ -323,8 +357,13 @@ def test_readiness_scorer(report: _TestReport):
 
     # Test 14: Non-default collation -> warning
     coll_db = DatabaseProfile(
-        name="coll_db", size_bytes=1_000_000_000, size_gb=0.93,
-        table_count=5, extensions=[], functions=[], triggers=[],
+        name="coll_db",
+        size_bytes=1_000_000_000,
+        size_gb=0.93,
+        table_count=5,
+        extensions=[],
+        functions=[],
+        triggers=[],
         non_default_collation_count=8,
     )
     result_coll = compute_readiness_score(coll_db)
@@ -338,6 +377,7 @@ def test_readiness_scorer(report: _TestReport):
 # =============================================================================
 # Test: Blueprint Generator
 # =============================================================================
+
 
 def test_blueprint_generator(report: _TestReport):
     print("\n--- Blueprint Generator ---")
@@ -375,7 +415,9 @@ def test_blueprint_generator(report: _TestReport):
     report.add("Phase 4: GoLive", blueprint.phases[3].name == "Performance Tuning & Go-Live", blueprint.phases[3].name)
     report.add("Total days > 0", blueprint.total_estimated_days > 0, f"{blueprint.total_estimated_days} days")
     report.add("Has prerequisites", len(blueprint.prerequisites) > 0, f"{len(blueprint.prerequisites)} prerequisites")
-    report.add("Has post-checks", len(blueprint.post_migration_checks) > 0, f"{len(blueprint.post_migration_checks)} checks")
+    report.add(
+        "Has post-checks", len(blueprint.post_migration_checks) > 0, f"{len(blueprint.post_migration_checks)} checks"
+    )
     report.add("Has rollback plan", len(blueprint.rollback_plan) > 0, "Rollback plan present")
 
     # Test markdown rendering
@@ -385,21 +427,30 @@ def test_blueprint_generator(report: _TestReport):
     report.add("Markdown has phases", "## Phase 1" in md and "## Phase 4" in md, "All phases present")
     report.add("Markdown has commands", "pg_dump" in md, "pg_dump command found")
     report.add("Markdown has score", str(assessment.overall_score) in md, "Score in report")
-    report.add("Markdown has disable-triggers warning", "disable-triggers" in md.lower() or "disable_triggers" in md.lower(), "Trigger warning present")
-    report.add("Markdown has plain-text recommendation", "plain-text" in md.lower() or "plain text" in md.lower(), "Plain-text dump note present")
+    report.add(
+        "Markdown has disable-triggers warning",
+        "disable-triggers" in md.lower() or "disable_triggers" in md.lower(),
+        "Trigger warning present",
+    )
+    report.add(
+        "Markdown has plain-text recommendation",
+        "plain-text" in md.lower() or "plain text" in md.lower(),
+        "Plain-text dump note present",
+    )
 
 
 # =============================================================================
 # Test: AssessmentMixin (4 Tools via ProvisioningAgent)
 # =============================================================================
 
+
 def test_assessment_mixin(report: _TestReport):
     print("\n--- AssessmentMixin (4 Tools) ---")
 
-    from utils.lakebase_client import LakebaseClient
-    from utils.delta_writer import DeltaWriter
-    from utils.alerting import AlertManager
     from agents import ProvisioningAgent
+    from utils.alerting import AlertManager
+    from utils.delta_writer import DeltaWriter
+    from utils.lakebase_client import LakebaseClient
 
     client = LakebaseClient(workspace_host="test", mock_mode=True)
     writer = DeltaWriter(mock_mode=True)
@@ -424,22 +475,42 @@ def test_assessment_mixin(report: _TestReport):
         mock=True,
     )
     report.add("connect_and_discover returns profile_id", "profile_id" in discovery, discovery.get("profile_id", ""))
-    report.add("connect_and_discover returns tables", discovery.get("table_count", 0) > 0, f"{discovery.get('table_count')} tables")
-    report.add("connect_and_discover returns extensions", discovery.get("extension_count", 0) > 0, f"{discovery.get('extension_count')} extensions")
+    report.add(
+        "connect_and_discover returns tables",
+        discovery.get("table_count", 0) > 0,
+        f"{discovery.get('table_count')} tables",
+    )
+    report.add(
+        "connect_and_discover returns extensions",
+        discovery.get("extension_count", 0) > 0,
+        f"{discovery.get('extension_count')} extensions",
+    )
     report.add("connect_and_discover returns size", discovery.get("size_gb", 0) > 0, f"{discovery.get('size_gb')} GB")
 
     # Tool 2: profile_workload
     workload = agent.profile_workload(profile_data=discovery, mock=True)
     report.add("profile_workload returns QPS", workload.get("avg_qps", 0) > 0, f"QPS={workload.get('avg_qps')}")
     report.add("profile_workload returns TPS", workload.get("avg_tps", 0) > 0, f"TPS={workload.get('avg_tps')}")
-    report.add("profile_workload returns connections", workload.get("connection_count_peak", 0) > 0, f"Peak={workload.get('connection_count_peak')}")
+    report.add(
+        "profile_workload returns connections",
+        workload.get("connection_count_peak", 0) > 0,
+        f"Peak={workload.get('connection_count_peak')}",
+    )
 
     # Tool 3: assess_readiness
     assessment = agent.assess_readiness(profile_data=discovery, workload_data=workload)
-    report.add("assess_readiness returns score", "overall_score" in assessment, f"Score={assessment.get('overall_score')}")
+    report.add(
+        "assess_readiness returns score", "overall_score" in assessment, f"Score={assessment.get('overall_score')}"
+    )
     report.add("assess_readiness returns category", "category" in assessment, f"Category={assessment.get('category')}")
-    report.add("assess_readiness returns tier", "recommended_tier" in assessment, f"Tier={assessment.get('recommended_tier')}")
-    report.add("assess_readiness returns dimensions", "dimensions" in assessment, f"{len(assessment.get('dimensions', {}))} dimensions")
+    report.add(
+        "assess_readiness returns tier", "recommended_tier" in assessment, f"Tier={assessment.get('recommended_tier')}"
+    )
+    report.add(
+        "assess_readiness returns dimensions",
+        "dimensions" in assessment,
+        f"{len(assessment.get('dimensions', {}))} dimensions",
+    )
     report.add(
         "assess_readiness detects pg_cron",
         any("pg_cron" in b.get("description", "") for b in assessment.get("blockers", [])),
@@ -453,22 +524,33 @@ def test_assessment_mixin(report: _TestReport):
         lakebase_endpoint="ep-xxx.database.us-east-1.cloud.databricks.com",
     )
     report.add("blueprint returns strategy", "strategy" in blueprint, f"Strategy={blueprint.get('strategy')}")
-    report.add("blueprint returns phases", blueprint.get("phase_count", 0) == 4, f"{blueprint.get('phase_count')} phases")
-    report.add("blueprint returns days", blueprint.get("total_estimated_days", 0) > 0, f"{blueprint.get('total_estimated_days')} days")
-    report.add("blueprint returns markdown", len(blueprint.get("report_markdown", "")) > 500, f"{len(blueprint.get('report_markdown', ''))} chars")
+    report.add(
+        "blueprint returns phases", blueprint.get("phase_count", 0) == 4, f"{blueprint.get('phase_count')} phases"
+    )
+    report.add(
+        "blueprint returns days",
+        blueprint.get("total_estimated_days", 0) > 0,
+        f"{blueprint.get('total_estimated_days')} days",
+    )
+    report.add(
+        "blueprint returns markdown",
+        len(blueprint.get("report_markdown", "")) > 500,
+        f"{len(blueprint.get('report_markdown', ''))} chars",
+    )
 
 
 # =============================================================================
 # Test: End-to-End Pipeline
 # =============================================================================
 
+
 def test_end_to_end(report: _TestReport):
     print("\n--- End-to-End Pipeline ---")
 
-    from utils.lakebase_client import LakebaseClient
-    from utils.delta_writer import DeltaWriter
-    from utils.alerting import AlertManager
     from agents import ProvisioningAgent
+    from utils.alerting import AlertManager
+    from utils.delta_writer import DeltaWriter
+    from utils.lakebase_client import LakebaseClient
 
     agent = ProvisioningAgent(
         LakebaseClient(workspace_host="test", mock_mode=True),
@@ -485,12 +567,18 @@ def test_end_to_end(report: _TestReport):
 
     report.add("E2E: Discovery succeeded", discovery.get("table_count", 0) > 0, "Discovery OK")
     report.add("E2E: Workload profiled", workload.get("avg_qps", 0) > 0, "Workload OK")
-    report.add("E2E: Assessment scored", assessment.get("overall_score", 0) > 0, f"Score={assessment.get('overall_score')}")
+    report.add(
+        "E2E: Assessment scored", assessment.get("overall_score", 0) > 0, f"Score={assessment.get('overall_score')}"
+    )
     report.add("E2E: Blueprint generated", blueprint.get("phase_count", 0) == 4, "Blueprint OK")
 
     # Verify the markdown report contains key sections
     md = blueprint.get("report_markdown", "")
-    report.add("E2E: Report has blockers section", "Blocker" in md or "blocker" in md.lower() or "Risk" in md, "Blockers section found")
+    report.add(
+        "E2E: Report has blockers section",
+        "Blocker" in md or "blocker" in md.lower() or "Risk" in md,
+        "Blockers section found",
+    )
     report.add("E2E: Report has pg_dump commands", "pg_dump" in md, "pg_dump in report")
     report.add("E2E: Report has Lakebase sizing", "CU" in md, "CU sizing in report")
 
@@ -499,13 +587,14 @@ def test_end_to_end(report: _TestReport):
 # Test: DynamoDB Assessment
 # =============================================================================
 
+
 def test_dynamodb_discovery(report: _TestReport):
     print("\n--- DynamoDB Discovery ---")
 
-    from utils.lakebase_client import LakebaseClient
-    from utils.delta_writer import DeltaWriter
-    from utils.alerting import AlertManager
     from agents import ProvisioningAgent
+    from utils.alerting import AlertManager
+    from utils.delta_writer import DeltaWriter
+    from utils.lakebase_client import LakebaseClient
 
     agent = ProvisioningAgent(
         LakebaseClient(workspace_host="test", mock_mode=True),
@@ -519,15 +608,37 @@ def test_dynamodb_discovery(report: _TestReport):
         mock=True,
     )
     report.add("DynamoDB: discovery returns profile_id", "profile_id" in discovery, discovery.get("profile_id", ""))
-    report.add("DynamoDB: engine is dynamodb", discovery.get("source_engine") == "dynamodb", f"{discovery.get('source_engine')}")
-    report.add("DynamoDB: has table_count", discovery.get("table_count", 0) > 0, f"{discovery.get('table_count')} tables")
+    report.add(
+        "DynamoDB: engine is dynamodb",
+        discovery.get("source_engine") == "dynamodb",
+        f"{discovery.get('source_engine')}",
+    )
+    report.add(
+        "DynamoDB: has table_count", discovery.get("table_count", 0) > 0, f"{discovery.get('table_count')} tables"
+    )
     report.add("DynamoDB: has size_gb", discovery.get("size_gb", 0) > 0, f"{discovery.get('size_gb')} GB")
     report.add("DynamoDB: has gsi_count", discovery.get("gsi_count", 0) > 0, f"{discovery.get('gsi_count')} GSIs")
-    report.add("DynamoDB: has billing_mode", discovery.get("billing_mode") is not None, f"{discovery.get('billing_mode')}")
-    report.add("DynamoDB: has streams_enabled", discovery.get("streams_enabled") is not None, f"{discovery.get('streams_enabled')}")
-    report.add("DynamoDB: has pitr_enabled", discovery.get("pitr_enabled") is not None, f"{discovery.get('pitr_enabled')}")
-    report.add("DynamoDB: no extensions field", "extensions" not in discovery or "extension_count" not in discovery, "No PG extensions in DynamoDB")
-    report.add("DynamoDB: source_version is DynamoDB", discovery.get("source_version") == "DynamoDB", f"{discovery.get('source_version')}")
+    report.add(
+        "DynamoDB: has billing_mode", discovery.get("billing_mode") is not None, f"{discovery.get('billing_mode')}"
+    )
+    report.add(
+        "DynamoDB: has streams_enabled",
+        discovery.get("streams_enabled") is not None,
+        f"{discovery.get('streams_enabled')}",
+    )
+    report.add(
+        "DynamoDB: has pitr_enabled", discovery.get("pitr_enabled") is not None, f"{discovery.get('pitr_enabled')}"
+    )
+    report.add(
+        "DynamoDB: no extensions field",
+        "extensions" not in discovery or "extension_count" not in discovery,
+        "No PG extensions in DynamoDB",
+    )
+    report.add(
+        "DynamoDB: source_version is DynamoDB",
+        discovery.get("source_version") == "DynamoDB",
+        f"{discovery.get('source_version')}",
+    )
 
     workload = agent.profile_workload(profile_data=discovery, mock=True)
     report.add("DynamoDB: workload has QPS", workload.get("avg_qps", 0) > 0, f"QPS={workload.get('avg_qps')}")
@@ -561,16 +672,25 @@ def test_dynamodb_readiness(report: _TestReport):
     result = compute_readiness_score(dynamo_db, workload, source_engine="dynamodb")
 
     report.add("DynamoDB: score > 0", result.overall_score > 0, f"Score={result.overall_score}")
-    report.add("DynamoDB: has 6 dimensions", len(result.dimension_scores) == 6, f"{len(result.dimension_scores)} dimensions")
+    report.add(
+        "DynamoDB: has 6 dimensions", len(result.dimension_scores) == 6, f"{len(result.dimension_scores)} dimensions"
+    )
     report.add("DynamoDB: has blockers", len(result.blockers) > 0, f"{len(result.blockers)} blockers")
-    report.add("DynamoDB: feature_compatibility blocker present",
+    report.add(
+        "DynamoDB: feature_compatibility blocker present",
         any(b.category == "feature_compatibility" for b in result.blockers),
-        "Feature compatibility blockers found")
-    report.add("DynamoDB: effort > 15 days (cross-engine)",
-        result.estimated_effort_days >= 15, f"{result.estimated_effort_days} days")
-    report.add("DynamoDB: DAX flagged as unsupported",
+        "Feature compatibility blockers found",
+    )
+    report.add(
+        "DynamoDB: effort > 15 days (cross-engine)",
+        result.estimated_effort_days >= 15,
+        f"{result.estimated_effort_days} days",
+    )
+    report.add(
+        "DynamoDB: DAX flagged as unsupported",
         any("DAX" in b.description for b in result.blockers),
-        "DAX blocker found")
+        "DAX blocker found",
+    )
 
     no_pitr = DatabaseProfile(
         name="dynamo-no-pitr",
@@ -587,9 +707,11 @@ def test_dynamodb_readiness(report: _TestReport):
         pitr_enabled=False,
     )
     result2 = compute_readiness_score(no_pitr, source_engine="dynamodb")
-    report.add("DynamoDB: PITR warning when disabled",
+    report.add(
+        "DynamoDB: PITR warning when disabled",
         any("PITR" in b.description for b in result2.blockers),
-        "PITR blocker found")
+        "PITR blocker found",
+    )
 
 
 def test_dynamodb_blueprint(report: _TestReport):
@@ -625,33 +747,42 @@ def test_dynamodb_blueprint(report: _TestReport):
         source_engine="dynamodb",
     )
 
-    report.add("DynamoDB: strategy is cross_engine",
+    report.add(
+        "DynamoDB: strategy is cross_engine",
         blueprint.strategy == MigrationStrategy.CROSS_ENGINE,
-        f"Strategy={blueprint.strategy.value}")
+        f"Strategy={blueprint.strategy.value}",
+    )
     report.add("DynamoDB: 4 phases", len(blueprint.phases) == 4, f"{len(blueprint.phases)} phases")
-    report.add("DynamoDB: Phase 1 = Schema Design",
+    report.add(
+        "DynamoDB: Phase 1 = Schema Design",
         "Schema Design" in blueprint.phases[0].name or "Schema" in blueprint.phases[0].name,
-        blueprint.phases[0].name)
-    report.add("DynamoDB: Phase 3 = Application Rewrite",
-        "Application" in blueprint.phases[2].name,
-        blueprint.phases[2].name)
-    report.add("DynamoDB: total days > 0", blueprint.total_estimated_days > 0,
-        f"{blueprint.total_estimated_days} days")
+        blueprint.phases[0].name,
+    )
+    report.add(
+        "DynamoDB: Phase 3 = Application Rewrite", "Application" in blueprint.phases[2].name, blueprint.phases[2].name
+    )
+    report.add("DynamoDB: total days > 0", blueprint.total_estimated_days > 0, f"{blueprint.total_estimated_days} days")
 
     md = render_blueprint_markdown(blueprint, dynamo_db, assessment, source_engine="dynamodb")
     report.add("DynamoDB: markdown has DynamoDB label", "Amazon DynamoDB" in md, "DynamoDB label found")
     report.add("DynamoDB: markdown has type mapping table", "jsonb" in md.lower(), "Type mapping present")
-    report.add("DynamoDB: markdown has Export to S3", "Export to S3" in md or "export" in md.lower(), "S3 export mentioned")
-    report.add("DynamoDB: markdown has cross-engine note", "cross-engine" in md.lower() or "NoSQL" in md, "Cross-engine note present")
+    report.add(
+        "DynamoDB: markdown has Export to S3", "Export to S3" in md or "export" in md.lower(), "S3 export mentioned"
+    )
+    report.add(
+        "DynamoDB: markdown has cross-engine note",
+        "cross-engine" in md.lower() or "NoSQL" in md,
+        "Cross-engine note present",
+    )
 
 
 def test_dynamodb_end_to_end(report: _TestReport):
     print("\n--- DynamoDB End-to-End Pipeline ---")
 
-    from utils.lakebase_client import LakebaseClient
-    from utils.delta_writer import DeltaWriter
-    from utils.alerting import AlertManager
     from agents import ProvisioningAgent
+    from utils.alerting import AlertManager
+    from utils.delta_writer import DeltaWriter
+    from utils.lakebase_client import LakebaseClient
 
     agent = ProvisioningAgent(
         LakebaseClient(workspace_host="test", mock_mode=True),
@@ -667,18 +798,29 @@ def test_dynamodb_end_to_end(report: _TestReport):
 
     report.add("DynamoDB E2E: Discovery succeeded", discovery.get("table_count", 0) > 0, "Discovery OK")
     report.add("DynamoDB E2E: Workload profiled", workload.get("avg_qps", 0) > 0, "Workload OK")
-    report.add("DynamoDB E2E: Assessment scored", assessment.get("overall_score", 0) > 0, f"Score={assessment.get('overall_score')}")
-    report.add("DynamoDB E2E: Strategy is cross_engine", assessment.get("_assessment") is not None or blueprint.get("strategy") == "cross_engine", f"Strategy={blueprint.get('strategy')}")
+    report.add(
+        "DynamoDB E2E: Assessment scored",
+        assessment.get("overall_score", 0) > 0,
+        f"Score={assessment.get('overall_score')}",
+    )
+    report.add(
+        "DynamoDB E2E: Strategy is cross_engine",
+        assessment.get("_assessment") is not None or blueprint.get("strategy") == "cross_engine",
+        f"Strategy={blueprint.get('strategy')}",
+    )
     report.add("DynamoDB E2E: Blueprint generated", blueprint.get("phase_count", 0) == 4, "Blueprint OK")
 
     md = blueprint.get("report_markdown", "")
     report.add("DynamoDB E2E: Report mentions DynamoDB", "DynamoDB" in md, "DynamoDB in report")
-    report.add("DynamoDB E2E: Report has type mapping", "jsonb" in md.lower() or "JSONB" in md, "Type mapping in report")
+    report.add(
+        "DynamoDB E2E: Report has type mapping", "jsonb" in md.lower() or "JSONB" in md, "Type mapping in report"
+    )
 
 
 # =============================================================================
 # Main
 # =============================================================================
+
 
 def main():
     print("\n" + "=" * 70)

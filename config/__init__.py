@@ -1,25 +1,27 @@
+# AlertSeverity canonical definition is in utils/alerting.py
+from utils.alerting import AlertSeverity
+
 from .settings import (
-    Environment,
-    BranchType,
-    BranchingPattern,
-    AlertSeverity,
-    RemediationRisk,
-    LakebaseProjectConfig,
-    BranchConfig,
-    AlertThresholds,
     DELTA_TABLES,
     LAKEBASE_CONSTRAINTS,
+    AlertThresholds,
+    BranchConfig,
+    BranchingPattern,
+    BranchType,
+    Environment,
+    LakebaseProjectConfig,
+    RemediationRisk,
 )
 
 __all__ = [
-    "Environment",
-    "BranchType",
-    "BranchingPattern",
-    "AlertSeverity",
-    "RemediationRisk",
-    "LakebaseProjectConfig",
-    "BranchConfig",
-    "AlertThresholds",
     "DELTA_TABLES",
     "LAKEBASE_CONSTRAINTS",
+    "AlertSeverity",
+    "AlertThresholds",
+    "BranchConfig",
+    "BranchType",
+    "BranchingPattern",
+    "Environment",
+    "LakebaseProjectConfig",
+    "RemediationRisk",
 ]

@@ -2,7 +2,7 @@
 # Core (required)
 databricks-sdk>=0.81.0
 psycopg[binary]>=3.0
-psycopg2-binary>=2.9
+requests>=2.31.0
 
 # PySpark (available in Databricks runtime, install locally for dev)
 # pyspark>=3.5.0
