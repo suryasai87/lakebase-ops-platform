@@ -329,13 +329,33 @@ def assessment_extension_matrix(profile_id: str):
     }
 
 
+_ENGINE_CLOUD_MAP = {
+    "aurora-postgresql": "aws",
+    "aurora-mysql": "aws",
+    "rds-postgresql": "aws",
+    "rds-mysql": "aws",
+    "cloud-sql-postgresql": "gcp",
+    "cloud-sql-mysql": "gcp",
+    "azure-postgresql": "azure",
+    "azure-mysql": "azure",
+    "dynamodb": "aws",
+}
+
+_REGION_MAP = {
+    "aws": ["us-east-1", "us-east-2", "us-west-1", "us-west-2", "eu-west-1",
+            "eu-west-2", "eu-central-1", "ap-southeast-1", "ap-northeast-1"],
+    "gcp": ["us-central1", "us-east1", "us-west1", "europe-west1",
+            "europe-west4", "asia-east1", "asia-northeast1"],
+    "azure": ["eastus", "eastus2", "westus2", "westeurope", "northeurope",
+              "southeastasia", "japaneast"],
+}
+
+
 @router.get("/regions/{engine}", operation_id="assessment_regions")
 def assessment_regions(engine: str):
     """Return available regions for a source engine's cloud provider."""
-    from config.pricing import ENGINE_CLOUD_MAP, get_regions_for_engine
-
-    cloud = ENGINE_CLOUD_MAP.get(engine, "aws")
-    regions = get_regions_for_engine(engine)
+    cloud = _ENGINE_CLOUD_MAP.get(engine, "aws")
+    regions = _REGION_MAP.get(cloud, _REGION_MAP["aws"])
     return {"engine": engine, "cloud": cloud, "regions": regions}
 
 

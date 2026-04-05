@@ -1,6 +1,6 @@
 # LakebaseOps: Autonomous Lakebase Database Operations Platform
 
-> **v2.2** | 3 Agents | 51 Tools | 8 Source Engines | PostgreSQL 17
+> **v2.3** | 3 Agents | 51 Tools | 8 Source Engines | PostgreSQL 17
 
 **Automated DBA Operations, Monitoring & OLTP-to-OLAP Lifecycle Management**
 
@@ -216,29 +216,62 @@ Required variables (see `.env.example` for full list):
 | `LAKEBASE_PROJECT_ID` | Lakebase project ID |
 | `SQL_WAREHOUSE_ID` | SQL warehouse for Delta queries |
 | `LAKEBASE_ENDPOINT_HOST` | Lakebase endpoint hostname |
+| `LAKEBASE_ENDPOINT_NAME` | Lakebase endpoint name |
+| `LAKEBASE_DB_NAME` | Lakebase database name (default: `databricks_postgres`) |
+| `LAKEBASE_DEFAULT_BRANCH` | Default branch (default: `production`) |
 
 2. **Build the frontend**:
 
 ```bash
 cd app/frontend
 bun install
-bun run build
-cd ../..
+bun run build    # outputs to app/static/
 ```
 
-3. **Deploy** - Upload the `app/` directory to your Databricks workspace and deploy:
+3. **Upload to Databricks workspace** — only the runtime files are needed (`backend/`, `static/`, `app.yaml`, `requirements.txt`). Do NOT upload `frontend/` or `node_modules/`:
+
+```bash
+# Upload app directory (excluding frontend source)
+databricks workspace import-dir app/backend /Workspace/Apps/<app-name>/backend --overwrite --profile <your-profile>
+databricks workspace import-dir app/static /Workspace/Apps/<app-name>/static --overwrite --profile <your-profile>
+databricks workspace import app/app.yaml /Workspace/Apps/<app-name>/app.yaml --overwrite --profile <your-profile>
+databricks workspace import app/requirements.txt /Workspace/Apps/<app-name>/requirements.txt --overwrite --profile <your-profile>
+```
+
+4. **Deploy the app**:
 
 ```bash
 databricks apps deploy <app-name> \
-  --source-code-path /Workspace/Users/<you>/<app-source> \
+  --source-code-path /Workspace/Apps/<app-name> \
   --profile <your-profile>
 ```
 
-4. **Create scheduled jobs** (optional) - Deploy the 7 Databricks Jobs for continuous monitoring:
+5. **Grant permissions** to the app's service principal:
+
+```bash
+# Catalog access (USE CATALOG + USE SCHEMA + SELECT)
+databricks api patch /api/2.0/unity-catalog/permissions/catalog/<catalog> \
+  --json '{"changes": [{"principal": "<sp-client-id>", "add": ["USE_CATALOG"]}]}' \
+  --profile <your-profile>
+
+# SQL warehouse access
+databricks api put /api/2.0/permissions/sql/warehouses/<warehouse-id> \
+  --json '{"access_control_list": [{"service_principal_name": "<sp-client-id>", "permission_level": "CAN_USE"}]}' \
+  --profile <your-profile>
+
+# Lakebase credential grant
+databricks api put /api/2.0/permissions/database-projects/<project-id> \
+  --json '{"access_control_list": [{"service_principal_name": "<sp-client-id>", "permission_level": "CAN_USE"}]}' \
+  --profile <your-profile>
+```
+
+6. **Create scheduled jobs** (optional) - Deploy the 7 Databricks Jobs for continuous monitoring:
 
 ```bash
 uv run python jobs/databricks_job_definitions.py
 ```
+
+> **Live deployment**: https://lakebase-ops-v2-1602460480284688.aws.databricksapps.com (FEVM HLS AMER workspace)
 
 ### Monitoring App Pages
 
@@ -248,7 +281,9 @@ uv run python jobs/databricks_job_definitions.py
 | Agents | `/agents` | Agent status and tool inventory |
 | Performance | `/performance` | Slow query analysis and regression detection |
 | Indexes | `/indexes` | Index recommendations |
-| Operations | `/operations` | Vacuum, sync, branches, archival |
+| Operations | `/operations` | Vacuum, sync, branches, archival, lakehouse sync CDC |
+| Branches | `/branches` | Branch management with observability (age, storage, TTL compliance) |
+| Adoption | `/adoption` | 9 adoption KPIs with sprint-over-sprint trend charts |
 | Live Stats | `/live` | Real-time Lakebase pg_stat metrics |
 | Assessment | `/assessment` | Migration assessment pipeline (4-step wizard) with enrichments |
 
@@ -262,7 +297,7 @@ After running the 4-step assessment pipeline, the Assessment page displays three
 
 ---
 
-## Project Structure (V2.2 - Modular Mixin Architecture)
+## Project Structure (V2.3 - Modular Mixin Architecture)
 
 ```
 lakebase-ops-platform/
@@ -530,6 +565,20 @@ bun run dev          # Vite dev server with HMR
 ---
 
 ## Changelog
+
+### v2.3 (2026-04-05)
+
+- Deployed as `lakebase-ops-v2` on FEVM HLS AMER workspace with full permissions (catalog, warehouse, Lakebase credential)
+- Added Branches page with Lakebase API integration — branch status, create/delete/reset, observability tab (age distribution, storage per branch, creation rate, TTL compliance)
+- Added Adoption Metrics page with 9 KPIs (mock classes, provisioning time, DBA tickets, dev wait, migration success rate, active branches, CI/CD integrations, agent invocations, compliance score) and sprint-over-sprint trend charts
+- Added `/api/operations/branches/status` endpoint — fetches branches from Lakebase Database Projects API with mock fallback
+- Added `/api/operations/branches/observability` endpoint — computed age distribution, storage, creation rate, TTL compliance
+- Added `/api/metrics/adoption` endpoint — adoption KPIs and sprint trend data
+- Fixed `/api/assessment/regions/{engine}` — inlined region/cloud mappings to remove dependency on `config.pricing` module
+- Implemented 52 gap fixes from cross-document analysis (Google Slides, Google Docs, Jira board): security hardening, branch governance (PolicyEngine), Lakehouse Sync CDC monitoring, event-driven agent coordination, 352 new tests
+- Added Databricks Asset Bundle (`databricks.yml`) with dev/staging/prod targets, 7 serverless jobs, app deployment config
+- Added GitHub Actions CI pipeline (`ci.yml`) with pytest, vitest, ruff, mypy
+- Updated deployment docs with permission grant instructions (catalog, warehouse, Lakebase credential)
 
 ### v2.2 (2026-03-11)
 

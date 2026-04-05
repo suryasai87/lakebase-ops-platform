@@ -1,0 +1,1087 @@
+﻿Enterprise Lakebase Design Guide
+Naming Standards, Branching Best Practices & Governance Framework inspired by Unity Catalog
+Jonathan Katz, Surya S Turaga, Uday Satapathy and Ryan DeCosmo
+———
+
+
+Part 1: Unity Catalog Design Considerations
+1.1 Three-Level Namespace Architecture[a]
+Unity Catalog extends the traditional two-level namespace with a top-level catalog layer, creating a three-part naming convention for every asset:
+catalog.schema.table_or_view
+This hierarchy enables centralized governance across workspaces and environments while providing flexible isolation boundaries.
+
+
+Level
+	Purpose
+	Typical Mapping
+	Metastore
+	Regional container (one per cloud region)
+	Cloud region (us-east-1, eu-west-1)
+	Catalog
+	Primary isolation unit
+	Environment, domain, business unit, or hybrid
+	Schema
+	Logical grouping within catalog
+	Data layer, functional area, data product
+	Table/View
+	Individual data asset
+	Business entity or analytical artifact
+	1.2 Catalog Naming Conventions
+Pattern 1: Environment-Based Catalogs
+Best for organizations with strict SDLC separation requirements.
+
+
+Catalog Name
+	Purpose
+	dev_finance
+	Development environment for finance domain
+	staging_finance
+	Pre-production validation
+	prod_finance
+	Production finance data
+	Format: envdomain or envdomain_qualifier
+Examples: devsales, staginghrsensitive, prodmarketing
+Pattern 2: Domain-Based Catalogs (Data Mesh)
+Best for decentralized data ownership and data mesh architectures.
+
+
+Catalog Name
+	Owner
+	Purpose
+	finance
+	Finance Data Team
+	All finance data assets
+	supply_chain
+	Supply Chain Team
+	Operational and analytical data
+	clinical_trials
+	Clinical Ops
+	Trial data and analytics
+	Format: domain or domain_qualifier
+Pattern 3: Hybrid (Environment + Domain)
+The most common enterprise pattern combining both approaches.
+
+
+Catalog Name
+	Environment
+	Domain
+	prod_finance
+	Production
+	Finance
+	dev_finance
+	Development
+	Finance
+	prod_supply_chain
+	Production
+	Supply Chain
+	sandbox_analytics
+	Sandbox
+	Cross-domain analytics
+	Format: envdomainoptional_suffix
+Catalog Naming Rules
+* Use lowercase with underscores as separators
+* Keep names under 30 characters
+* Avoid special characters except underscores
+* Start with environment prefix (dev, stg, prod) OR domain name
+* Avoid generic names (data, catalog1, test)
+* Assign ownership to groups, not individuals
+* Document purpose using tags and comments
+1.3 Schema Naming Conventions
+Medallion Architecture Schemas
+The most widely adopted pattern for data engineering pipelines.
+
+
+Schema
+	Purpose
+	Example Tables
+	bronze
+	Raw/landing zone data
+	customer_raw, orders_raw
+	silver
+	Cleansed and enriched data
+	customer_cleaned, orders_enriched
+	gold
+	Business-ready reporting layer
+	dim_customer, fact_sales
+	staging
+	Intermediate processing
+	stg_customer_transform
+	reference
+	Reference/lookup tables
+	ref_country_codes, ref_icd10
+	Functional Schemas
+
+
+Schema
+	Purpose
+	data_vault
+	Hub, satellite, and link tables
+	mart
+	Business-specific data marts
+	ml_features
+	Feature store tables
+	audit
+	Audit and compliance tables
+	scratch
+	Temporary exploration space
+	Data Product Schemas
+For organizations publishing data products for cross-team consumption.
+Format: dpproductname or product_domain
+
+
+Schema
+	Published By
+	Consumers
+	dp_customer_360
+	Customer Analytics
+	Marketing, Sales, Support
+	dp_revenue_metrics
+	Finance
+	Executive, Sales
+	dp_clinical_outcomes
+	Clinical Ops
+	R&D, Regulatory
+	1.4 Table and View Naming Conventions[b]
+General Rules
+* Use lower_snake_case for all table and view names
+* Prefix with the table type for analytical models
+* Include SCD type suffix for dimension tables with history
+Naming Patterns by Type
+
+
+Type
+	Prefix/Suffix
+	Example
+	Dimension table
+	dim_
+	dim_customer, dim_product
+	Fact table
+	fact_
+	fact_sales_orders, fact_claims
+	Slowly Changing Dimension
+	_scd2
+	dim_customer_scd2
+	Hub table (Data Vault)
+	hub_
+	hub_customer, hub_provider
+	Satellite table
+	sat_
+	sat_customer_profile
+	Link table
+	link_
+	link_order_customer
+	Staging table
+	stg_
+	stg_customer_transform
+	View (curated)
+	vw_
+	vw_active_customers
+	Materialized view
+	mv_
+	mv_daily_revenue
+	Streaming table
+	st_
+	st_iot_events
+	Raw/landing table
+	_raw
+	customer_raw, claims_raw
+	Volume Naming
+
+
+Type
+	Convention
+	Example
+	Managed volume
+	vol_purpose
+	vol_raw_files, vol_exports
+	External volume
+	ext_vol_source
+	ext_vol_sftp_landing
+	Model artifacts
+	vol_ml_artifacts
+	vol_ml_artifacts
+	1.5 Multi-Catalog Strategy Decision Framework
+When to Use Separate Catalogs
+
+
+Scenario
+	Recommendation
+	Different environments (dev/staging/prod)
+	**Separate catalogs** per environment
+	Different business domains with distinct governance
+	**Separate catalogs** per domain
+	Regulatory isolation requirements (HIPAA, PCI)
+	**Separate catalogs** for sensitive data
+	Cross-team shared data products
+	**Dedicated catalog** for published products
+	Sandbox/exploration work
+	**Dedicated sandbox catalog** per team
+	When to Use Schemas Within a Single Catalog
+
+
+Scenario
+	Recommendation
+	Single team with multiple data layers
+	**Multiple schemas** (bronze/silver/gold)
+	Closely related data products from same team
+	**Schema per product** within domain catalog
+	Small organization with limited data assets
+	Single catalog, multiple schemas
+	Enterprise Reference Architecture
+A recommended multi-catalog layout for a mid-to-large enterprise:
+
+
+Catalog
+	Purpose
+	Access Pattern
+	prod_core
+	Production core business data
+	Read: analysts, data scientists. Write: pipelines only
+	prod_analytics
+	Production analytics and BI
+	Read: business users. Write: analytics team
+	prod_ml
+	Production ML features and models
+	Read: serving endpoints. Write: ML engineers
+	dev_core
+	Development environment
+	Read/Write: developers
+	stg_core
+	Staging/UAT environment
+	Read: QA. Write: CI/CD pipelines
+	sandbox_team_name
+	Team exploration space
+	Read/Write: specific team
+	shared_reference
+	Cross-domain reference data
+	Read: all. Write: data stewards
+	1.6 Access Control Aligned with Naming
+RBAC Group Naming Convention
+
+
+Group Name
+	Catalog Access
+	Schema Access
+	domain_data_owners
+	Full ownership of domain catalog
+	All schemas
+	domain_data_admins
+	USE CATALOG + CREATE SCHEMA
+	Domain schemas
+	domain_data_users
+	USE CATALOG
+	Specific schemas (SELECT)
+	domain_data_readonly
+	USE CATALOG
+	Specific schemas (SELECT only)
+	SQL Grant Examples
+-- Catalog-level access
+GRANT USE CATALOG ON CATALOG prod_finance TO finance_data_users;
+
+
+-- Schema-level access
+GRANT USE SCHEMA ON SCHEMA prod_finance.gold TO finance_analysts;
+GRANT SELECT ON SCHEMA prod_finance.gold TO finance_analysts;
+
+
+-- Data product access
+GRANT USE SCHEMA ON SCHEMA prod_core.dp_customer_360 TO marketing_team;
+GRANT SELECT ON SCHEMA prod_core.dp_customer_360 TO marketing_team;
+
+
+-- Service Principal access (use client ID in backticks)
+GRANT USE CATALOG ON CATALOG prod_core TO `42ccfce7-b085-401f-baf3-264dcbd01230`;
+
+
+———
+Part 2: Lakebase Branching Design for Enterprise
+2.1 Why Database Branching Matters
+Database branching brings Git-like workflows to database management. Instead of maintaining separate database instances for each environment, teams create lightweight copy-on-write branches that share underlying storage and diverge only where changes occur.
+The Lakebase Foundation, Inspired by Neon
+Databricks acquired Neon in May 2025, bringing copy-on-write PostgreSQL branching to the Databricks platform as Lakebase Autoscaling. Key architectural principles inherited from Neon:
+
+
+Principle
+	Description
+	Copy-on-Write (CoW)
+	Branches share base storage; only modified pages are stored separately
+	Instant creation
+	Branch creation is O(1) metadata operation regardless of database size
+	Zero impact on parent
+	Creating a branch does not affect the parent branch performance
+	Scale-to-zero
+	Idle branch compute suspends automatically, eliminating waste
+	Point-in-time branching
+	Create branches from any historical timestamp within the restore window
+	Industry Validation
+Database branching is now a production practice across the ecosystem:
+
+
+Platform
+	Engine
+	Branching Approach
+	Neon
+	PostgreSQL
+	Page-level CoW, instant, schema+data
+	Lakebase
+	PostgreSQL (Neon)
+	Page-level CoW with Lakehouse integration
+	2.2 Lakebase Autoscale Branching Capabilities
+Branch Hierarchy[c][d]
+Every Lakebase project starts with a default production branch. The hierarchy supports flexible parent-child relationships:
+production (default, protected)
+  |-- staging (protected)
+  |     |-- development
+  |     |     |-- dev/alice (TTL: 7d)
+  |     |     |-- dev/bob (TTL: 7d)
+  |     |     |-- ci/pr-142 (TTL: 4h)
+  |     |     |-- ci/pr-155 (TTL: 4h)
+  |     |-- qa/release-3.2 (TTL: 14d)
+  |-- hotfix/critical-fix (TTL: 24h)
+
+
+Branch Types
+
+
+Type
+	Behavior
+	Use Case
+	Default Branch
+	Always-on, cannot be deleted, exempt from compute limits
+	Production workloads
+	Protected Branch
+	Cannot be deleted, reset, or auto-archived
+	Staging, critical environments
+	Ephemeral Branch
+	Has TTL (max 30 days), auto-deletes on expiry
+	CI/CD, feature development
+	Point-in-Time Branch
+	Created from historical timestamp within restore window (0-30 days)
+	Disaster recovery, auditing
+	Branch Operations via CLI
+# Create a branch
+databricks postgres create-branch projects/my-project development \
+  --json '{"spec": {"source_branch": "projects/my-project/branches/production", "ttl": "604800s"}}'
+
+
+# List all branches
+databricks postgres list-branches projects/my-project --output json
+
+
+# Get branch details
+databricks postgres get-branch projects/my-project/branches/development
+
+
+# Reset branch from parent
+databricks postgres reset-branch projects/my-project/branches/development
+
+
+# Protect a branch
+databricks postgres update-branch projects/my-project/branches/production spec.is_protected \
+  --json '{"spec": {"is_protected": true}}'
+
+
+# Delete a branch
+databricks postgres delete-branch projects/my-project/branches/development
+
+
+Branch Operations via Python SDK
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.postgres import Branch, BranchSpec, Duration
+
+
+w = WorkspaceClient()
+
+
+# Create branch with TTL
+branch = w.postgres.create_branch(
+    parent=f"projects/{project_name}",
+    branch=Branch(spec=BranchSpec(
+        source_branch=prod_branch_name,
+        ttl=Duration(seconds=86400)
+    )),
+    branch_id="feature-branch"
+).wait()
+
+
+# Delete branch
+w.postgres.delete_branch(
+    name="projects/my-project/branches/feature-branch"
+).wait()
+
+
+Current Limitations
+
+
+Limitation
+	Impact
+	Workaround
+	No merge capability[e][f][g][h]
+	Cannot auto-merge branch changes to parent
+	Replay idempotent DDL on parent
+	No schema-only branches
+	All branches include data
+	Use RLS to restrict data access
+	Max 10 unarchived branches
+	Branch sprawl management required
+	Use TTLs and CI/CD automation
+	No CI/CD PR comment integration
+	Schema diff is UI-only
+	Build custom GitHub Action wrapper
+	Branch naming: RFC 1123
+	1-63 chars, lowercase, starts with letter
+	Plan naming conventions carefully
+	Max-min autoscale range <= 8 CU
+	Limited autoscaling flexibility
+	Right-size for expected workload
+	2.3 Lakebase Branch Naming Standards (NEW)
+Naming Rules (Technical Constraints)
+* 1 to 63 characters
+* Must start with a lowercase letter
+* RFC 1123 compliant: lowercase alphanumeric and hyphens only
+* No underscores, uppercase, or special characters
+Recommended Naming Conventions
+
+
+Pattern
+	Convention
+	Example
+	Use Case
+	Production
+	production
+	production
+	Default branch, always protected
+	Staging
+	staging
+	staging
+	Pre-production validation
+	Development
+	development
+	development
+	Shared development branch
+	Developer
+	dev-firstname
+	dev-alice, dev-bob
+	Per-developer isolation
+	CI/CD
+	ci-pr-number
+	ci-pr-142, ci-pr-287
+	Ephemeral PR branches
+	Feature
+	feat-short-desc
+	feat-add-auth, feat-patient-api
+	Feature development
+	Hotfix
+	hotfix-ticket
+	hotfix-jira-1234
+	Emergency production fixes
+	QA/Release
+	qa-release-version
+	qa-release-3-2
+	Release validation
+	Load Test
+	perf-test-name
+	perf-baseline-feb
+	Performance testing
+	Audit
+	audit-date
+	audit-2026-02-21
+	Point-in-time audit snapshots
+	Demo
+	demo-customer
+	demo-acme-corp
+	Customer-specific demos
+	Naming Convention Decision Tree
+1. Is this the main database? Use production (protected)
+2. Is this for pre-prod validation? Use staging (protected)
+3. Is this for a specific developer? Use dev-firstname
+4. Is this for a pull request? Use ci-pr-number (TTL: 2-4 hours)
+5. Is this for a feature? Use feat-short-desc (TTL: 7 days)
+6. Is this for a hotfix? Use hotfix-ticket-id (TTL: 24 hours)
+7. Is this for a release? Use qa-release-version (TTL: 14 days)
+8. Is this for performance testing? Use perf-test-name (TTL: 48 hours)
+2.4 Recommended TTL Policies
+
+
+Branch Type
+	Recommended TTL
+	Rationale
+	CI/CD (per-PR)
+	2-4 hours
+	Tests complete within minutes; auto-cleanup
+	Hotfix
+	24 hours
+	Urgent fixes applied quickly
+	Performance test
+	48 hours
+	Load tests + analysis window
+	Feature development
+	7 days
+	Sprint-length development cycles
+	Demo
+	7-14 days
+	Customer demo + follow-up window
+	QA/Release
+	14 days
+	Release validation + regression testing
+	Developer (personal)
+	7 days
+	Reset weekly from the development branch
+	Audit snapshot
+	30 days
+	Maximum TTL for compliance review
+	Staging
+	No TTL (protected)
+	Long-lived, reset from production regularly
+	Production
+	No TTL (protected)
+	Default branch, never expires
+	2.5 Enterprise Branching Patterns
+Pattern 1: Simple Dev/Prod (Small Teams)
+Best for teams of 1-5 developers with a single application.
+production (protected)
+  |-- development
+
+
+* Two branches: production and development
+* Development resets from production weekly
+* Migrations tested on development, replayed on production
+Pattern 2: Multi-Environment Pipeline (Medium Teams)
+Best for teams of 5-20 with formal release processes.
+production (protected)
+  |-- staging (protected)
+  |     |-- development
+  |-- hotfix-ticket (ephemeral, TTL: 24h)
+
+
+* Three tiers: production, staging, development
+* Staging is protected; development resets from staging
+* Hotfix branches created directly from production for urgent fixes
+Pattern 3: Per-Developer Isolation (Large Teams)
+Best for teams of 20+ working on the same database schema.
+production (protected)
+  |-- staging (protected)
+  |     |-- development
+  |           |-- dev-alice (TTL: 7d)
+  |           |-- dev-jordan (TTL: 7d)
+  |           |-- dev-sam (TTL: 7d)
+
+
+* Each developer gets an isolated branch
+* Personal branches reset from development when starting new work
+* Schema Diff validates changes before promotion
+Pattern 4: CI/CD Ephemeral Branches (DevOps Teams)
+Best for teams with mature CI/CD pipelines.
+production (protected)
+  |-- staging (protected)
+  |     |-- ci-pr-123 (TTL: 4h)
+  |     |-- ci-pr-124 (TTL: 4h)
+  |     |-- ci-pr-125 (TTL: 4h)
+
+
+* Each pull request gets its own database clone
+* TTL handles automatic cleanup
+* Eliminates flaky shared test databases
+Pattern 5: Multi-Tenant (Project-Level Isolation)
+Best for SaaS platforms requiring strict tenant isolation.
+Project: tenant-alpha
+  |-- production (protected)
+  |     |-- development
+
+
+Project: tenant-beta
+  |-- production (protected)
+  |     |-- development
+
+
+* Separate Lakebase projects per tenant
+* Each project has its own branch hierarchy, compute, and storage
+* Unity Catalog enforces cross-tenant access control
+Pattern 6: Multi-Tenant (Schema-Level Isolation)
+Best for cost-sensitive multi-tenant applications.
+Project: multi-tenant-app
+  |-- production (protected)
+  |     |-- development
+
+
+PostgreSQL Schemas:
+  - tenant_alpha (with RLS policies)
+  - tenant_beta (with RLS policies)
+  - shared (common reference data)
+
+
+* Single project, multiple PostgreSQL schemas
+* Row-Level Security (RLS) enforces tenant isolation
+* Data API enforces RLS automatically via Databricks identity
+2.6 Schema Migration Workflow with Branching
+The Safe Migration Testing Workflow
+Step 1: Developer writes migration files locally (using Flyway, Liquibase, Prisma, or plain SQL)
+Step 2: PR is opened, triggering CI/CD pipeline
+Step 3: Pipeline creates a Lakebase branch from staging:
+databricks postgres create-branch projects/my-project ci-pr-142 \
+  --json '{"spec": {"source_branch": "projects/my-project/branches/staging", "ttl": "14400s"}}'
+
+
+Step 4: Migrations are applied to the branch
+Step 5: Schema Diff is captured (via Lakebase App UI or API)
+Step 6: Integration tests run against the migrated branch
+Step 7: Code review includes both code changes AND schema diff
+Step 8: On PR merge, migrations are replayed on staging, then production
+Step 9: Branch auto-deletes after TTL (or explicitly on PR close)
+Idempotent DDL Best Practices
+Since Lakebase does not support merge, all migrations must be idempotent (safe to re-run):
+-- Good: Idempotent DDL
+CREATE TABLE IF NOT EXISTS patients (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+
+
+CREATE INDEX IF NOT EXISTS idx_patients_email ON patients(email);
+
+
+-- Bad: Non-idempotent DDL (will fail on re-run)
+CREATE TABLE patients (...);
+ALTER TABLE patients ADD COLUMN email VARCHAR(255);
+
+
+2.7 GitHub Actions for Lakebase Branch Automation
+Create Branch on PR Open
+name: Create Lakebase Branch
+on:
+  pull_request:
+    types: [opened, reopened]
+jobs:
+  create-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Databricks CLI
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+
+
+      - name: Create Lakebase Branch
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          databricks postgres create-branch projects/${{ vars.LAKEBASE_PROJECT }} ci-pr-${{ github.event.pull_request.number }} \
+            --json '{"spec": {"source_branch": "projects/${{ vars.LAKEBASE_PROJECT }}/branches/staging", "ttl": "14400s"}}'
+
+
+      - name: Run Migrations
+        run: |
+          # Apply migrations against the branch endpoint
+          flyway -url=jdbc:postgresql://$BRANCH_ENDPOINT:5432/mydb migrate
+
+
+      - name: Run Tests
+        run: pytest tests/integration/ --db-branch=ci-pr-${{ github.event.pull_request.number }}
+
+
+Delete Branch on PR Close
+name: Delete Lakebase Branch
+on:
+  pull_request:
+    types: [closed]
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete Lakebase Branch
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          databricks postgres delete-branch \
+            projects/${{ vars.LAKEBASE_PROJECT }}/branches/ci-pr-${{ github.event.pull_request.number }} || true
+
+
+———
+Part 3: Unified Governance Framework
+3.1 Lakebase + Unity Catalog Integration
+Lakebase is uniquely positioned within the Databricks ecosystem because it participates in Unity Catalog governance. This means:
+
+
+Capability
+	Benefit
+	Centralized access control
+	Same RBAC model for OLTP and analytics data
+	Data lineage
+	Track data flow from Lakebase to Delta Lake
+	Audit logging
+	All operations logged in system.access.audit
+	Databricks identity
+	OAuth-based auth, no password management
+	Data API with RLS
+	RESTful access with Row-Level Security enforcement
+	3.2 Naming Alignment: Unity Catalog + Lakebase
+Recommended Naming Alignment
+
+
+Unity Catalog
+	Lakebase Equivalent
+	Naming Convention
+	Catalog: prod_finance
+	Project: finance-prod
+	Same domain, environment-prefixed
+	Schema: gold
+	PostgreSQL Schema: analytics
+	Purpose-aligned naming
+	Schema: bronze
+	PostgreSQL Schema: raw_ingest
+	Layer-aligned naming
+	Table: dim_customer
+	Table: customers
+	OLTP uses entity names, analytics uses dim/fact
+	Table: fact_transactions
+	Table: transactions
+	Same entity, different prefix convention
+	Cross-System Naming Rules
+
+
+Rule
+	Unity Catalog
+	Lakebase Branches
+	Lakebase Projects
+	Case
+	lowercase
+	lowercase
+	lowercase
+	Separator
+	underscore (_)
+	hyphen (-)
+	hyphen (-)
+	Max length
+	255 chars
+	63 chars
+	63 chars
+	Start with
+	letter or underscore
+	lowercase letter
+	lowercase letter
+	Environment prefix
+	dev_, stg_, prod_
+	dev-, staging, production
+	domain-env
+	Mapping Convention
+
+
+Environment
+	Unity Catalog Catalog
+	Lakebase Project
+	Lakebase Branch
+	Production
+	prod_supply_chain
+	supply-chain-prod
+	production
+	Staging
+	stg_supply_chain
+	supply-chain-prod
+	staging
+	Development
+	dev_supply_chain
+	supply-chain-prod
+	development
+	Developer
+	dev_supply_chain
+	supply-chain-prod
+	dev-alice
+	CI/CD
+	dev_supply_chain
+	supply-chain-prod
+	ci-pr-142
+	Key insight: A single Lakebase project with branches replaces what previously required separate database instances per environment, while Unity Catalog catalogs continue to separate the analytical layer.
+3.3 Enterprise Governance Checklist
+Unity Catalog Governance
+* Assign production catalog ownership to groups, not individuals
+* Grant USE CATALOG and USE SCHEMA only to authorized users
+* Implement row-level filtering and column masking for sensitive data
+* Use deployment scripts (Terraform, DABs) for privilege assignments
+* Audit permissions regularly using system.access.audit
+* Bind catalogs to specific workspaces for isolation
+* Document all catalogs and schemas with tags and comments
+Lakebase Governance
+* Mark production and staging branches as protected
+* Enforce TTL policies on all non-protected branches
+* Use CI/CD automation for branch creation and deletion
+* Validate all schema changes via Schema Diff before promotion
+* Write idempotent DDL for all migrations
+* Monitor branch count (max 10 unarchived per project)
+* Use Databricks identity (OAuth) instead of password-based access
+* Enable Row-Level Security for multi-tenant applications
+* Configure the Data API with appropriate exposed schemas and CORS origins
+Combined Framework
+* Align Lakebase project names with Unity Catalog domain names
+* Use consistent environment prefixes across both systems (accounting for separator differences)
+* Centralize access control through Unity Catalog groups
+* Track data lineage from Lakebase OLTP to Delta Lake analytics
+* Implement a single CI/CD pipeline that manages both Lakebase branches and Unity Catalog permissions
+3.4 Cost Optimization Strategies
+Lakebase Cost Controls
+
+
+Strategy
+	Implementation
+	Impact
+	TTL policies
+	Set expiration on all ephemeral branches
+	Prevents orphaned branch costs
+	Scale-to-zero
+	Default for non-production branches
+	Zero compute cost when idle
+	Branch limits
+	Max 10 unarchived; auto-archive idle branches
+	Controls storage growth
+	CoW efficiency
+	Branches only store divergence from parent
+	1GB change on 100GB DB costs approx 1GB
+	Nightly reset
+	Reset staging from production on schedule
+	Keeps branch sizes manageable
+	Unity Catalog Cost Controls
+
+
+Strategy
+	Implementation
+	Impact
+	Managed tables
+	Use managed storage over external for lifecycle control
+	Simplified cleanup
+	Sandbox TTL
+	Set data retention policies on sandbox catalogs
+	Prevents exploratory data sprawl
+	Query governance
+	Monitor system.billing.usage for expensive queries
+	Controls warehouse costs
+	Delta optimization
+	OPTIMIZE and VACUUM on gold-layer tables
+	Reduces storage and query costs
+	———
+Part 4: Neon-Inspired Patterns for Lakebase 
+4.1 Patterns Available Today
+These patterns are directly implementable with current Lakebase Autoscaling capabilities.
+Branch-per-Pull-Request
+Inspired by Neon's most popular CI/CD pattern. Each PR gets an isolated database clone:
+PR opened  ->  Create Lakebase branch (ci-pr-142, TTL: 4h)
+               -> Run migrations on branch
+               -> Run integration tests
+PR merged  ->  Replay migrations on staging/production
+               -> Branch auto-deletes after TTL
+PR closed  ->  Branch auto-deletes after TTL
+
+
+Branch-per-Developer
+Each engineer gets a persistent isolated environment that resets periodically:
+Developer onboard  ->  Create branch: dev-alice (TTL: 7d, auto-renew)
+                       -> Alice develops against her own branch
+                       -> Weekly reset from development branch
+Developer offboard ->  Delete branch
+
+
+Point-in-Time Audit Branches
+Create read-only snapshots for compliance investigations:
+Audit request  ->  Create branch from timestamp: audit-2026-02-21
+                   -> Auditors query historical state
+                   -> Branch auto-deletes after 30 days
+
+
+4.2 Patterns Requiring Custom Development
+These patterns require building automation on top of Lakebase primitives.
+Schema Diff in PR Comments
+Neon posts schema diffs directly to GitHub PR comments. For Lakebase, build a custom GitHub Action:
+1. Create branch from staging
+2. Apply migrations
+3. Use Lakebase Schema Diff API (or pg_dump comparison) to generate diff
+4. Post diff as a PR comment using GitHub API
+5. Clean up branch
+Automated Nightly Reset
+Lakebase supports scheduled branch resets, automate with Databricks Jobs:
+# Databricks Job: Nightly Staging Reset
+# Schedule: 0 2 * * * (2 AM daily)
+# Notebook content:
+from databricks.sdk import WorkspaceClient
+w = WorkspaceClient()
+w.postgres.reset_branch(name="projects/my-project/branches/staging")
+
+
+Branch Observability Dashboard
+Build a monitoring dashboard tracking:
+* Active branch count per project
+* Branch age distribution
+* Branch storage consumption (divergence from parent)
+* Branch creation/deletion rate
+* TTL compliance (branches approaching expiration)
+4.3 AI Agent Database Branching
+An emerging pattern from the industry: AI coding agents create database branches for safe testing.
+Implementation for Lakebase
+Store branching instructions in your project's CLAUDE.md or AGENTS.md:
+## Database Testing Instructions
+
+
+When making database schema changes:
+1. Create a Lakebase branch: databricks postgres create-branch projects/my-project ai-agent-test --json '{"spec": {"source_branch": "projects/my-project/branches/development", "ttl": "3600s"}}'
+2. Wait for branch to be ACTIVE
+3. Apply and test migrations against the branch endpoint
+4. Validate with Schema Diff
+5. On success, provide the migration SQL for human review
+6. Branch auto-deletes after 1 hour
+
+
+This enables every AI-generated schema change to be tested against a production-shaped database without risk.
+———
+Part 5: Quick Reference
+5.1 Unity Catalog Naming Cheat Sheet
+
+
+Asset
+	Convention
+	Example
+	Catalog (prod)
+	prod_domain
+	prod_finance
+	Catalog (dev)
+	dev_domain
+	dev_finance
+	Catalog (sandbox)
+	sandbox_team
+	sandbox_analytics
+	Schema (layer)
+	layer_name
+	bronze, silver, gold
+	Schema (data product)
+	dp_product
+	dp_customer_360
+	Dimension table
+	dim_entity
+	dim_customer
+	Fact table
+	fact_entity
+	fact_sales_orders
+	Staging table
+	stg_entity
+	stg_customer_transform
+	View
+	vw_description
+	vw_active_customers
+	Materialized view
+	mv_description
+	mv_daily_revenue
+	Streaming table
+	st_source
+	st_iot_events
+	Volume
+	vol_purpose
+	vol_raw_files
+	RBAC group
+	domain_role
+	finance_data_owners
+	5.2 Lakebase Naming Cheat Sheet
+
+
+Asset
+	Convention
+	Example
+	Project
+	domain-env
+	supply-chain-prod
+	Production branch
+	production
+	production
+	Staging branch
+	staging
+	staging
+	Development branch
+	development
+	development
+	Developer branch
+	dev-name
+	dev-alice
+	CI/CD branch
+	ci-pr-number
+	ci-pr-142
+	Feature branch
+	feat-description
+	feat-patient-api
+	Hotfix branch
+	hotfix-ticket
+	hotfix-jira-1234
+	QA branch
+	qa-release-version
+	qa-release-3-2
+	Performance branch
+	perf-test-name
+	perf-baseline-feb
+	Audit branch
+	audit-date
+	audit-2026-02-21
+	Demo branch
+	demo-customer
+	demo-acme-corp
+	5.3 TTL Quick Reference
+
+
+Branch Type
+	TTL
+	Auto-Delete
+	CI/CD
+	2-4 hours
+	Yes
+	Hotfix
+	24 hours
+	Yes
+	Performance test
+	48 hours
+	Yes
+	Feature
+	7 days
+	Yes
+	Developer
+	7 days
+	Yes (recreate weekly)
+	Demo
+	7-14 days
+	Yes
+	QA/Release
+	14 days
+	Yes
+	Audit
+	30 days
+	Yes
+	Staging
+	None (protected)
+	No
+	Production
+	None (protected)
+	No
+	5.4 Key CLI Commands
+# Unity Catalog
+GRANT USE CATALOG ON CATALOG prod_finance TO finance_users;
+GRANT USE SCHEMA ON SCHEMA prod_finance.gold TO finance_analysts;
+GRANT SELECT ON SCHEMA prod_finance.gold TO finance_analysts;
+
+
+# Lakebase Branching
+databricks postgres create-branch projects/PROJECT BRANCH_ID --json '{"spec": {...}}'
+databricks postgres list-branches projects/PROJECT
+databricks postgres get-branch projects/PROJECT/branches/BRANCH
+databricks postgres delete-branch projects/PROJECT/branches/BRANCH
+databricks postgres update-branch projects/PROJECT/branches/BRANCH spec.is_protected --json '{"spec": {"is_protected": true}}'
+[a]There's a near-to-middle-state where this is going to change, leveraging the proposed "folders" hierarchy from UC, where we can make this fully automated. The other elements become important further down on the project/branch naming.
+
+
+Maybe instead we can refocus this section on how to name the core objects within a Lakebase Project, i.e. a Postgres database, schema, table, etc.?
+[b]This is for OLAP/analytical tables. Typically Postgres tables are named after the objects they represent, given they're normalized to them.
+[c]Was this (or the AI that generated this) consulting the Neon docs on names? https://neon.com/docs/manage/branches#branch-naming-requirements
+[d]this refers the neon docs
+[e]Is there any discussion going on around dropping the phrase "Git-like branching" given that we have no merge capability or plans to add it? We don't actually have Git-like branching without merging -- the entire Git branching model and indeed most standard Git workflows heavily rely on merges, one way or another. Both with customers and among members of the field I've seen a lot of confusion on this point. This phrase in particular implies to any developer that they will be able to merge branches back in, and the fact that they can't radically changes how this feature belongs in developer workflows.
+[f]Thanks Chris agree, but it is the most resonated analogy in a meeting setup for someone to understand/explain branching. 
+
+
+What you are stating is absolutely right but thinking about messaging and explaining to legacy DBAs and someone new to this concept git like branching immediately is the light bulb moment.
+[g]_Marked as resolved_
+[h]_Re-opened_
+I agree it helps, but very candidly I haven't been in a conversation yet where someone _didn't_ assume that meant we had merging as well -- both with customers and internally with other FE folks. I worry we're accidentally misleading our customers quite a lot with this phrase. Personally I'd call it "CoW Replicas" or "Shallow Clones" or something similar (I don't like either of those because they're too wordy/technical, but it's more clear on what branches are at least).
