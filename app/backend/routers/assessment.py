@@ -201,6 +201,10 @@ def generate_blueprint(req: BlueprintRequest):
         workload_data=cached if cached else None,
     )
 
+    # Store blueprint result back into profile cache so timeline/cost endpoints work
+    if req.profile_id:
+        _profiles.set(req.profile_id, {**cached, **result})
+
     raw_phases = result.get("phases", [])
     phases = [
         {
