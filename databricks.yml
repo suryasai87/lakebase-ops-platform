@@ -29,24 +29,16 @@ variables:
     default: ""
 
 workspace:
-  root_path: /Workspace/Apps/lakebase-ops-platform
-
-artifacts:
-  app_frontend:
-    type: files
-    path: ./app
-    files:
-      - source: ./**
-        destination: .
+  root_path: /Workspace/Users/${workspace.current_user.userName}/lakebase-ops-platform
 
 resources:
   # ---------------------------------------------------------------------------
   # Databricks App
   # ---------------------------------------------------------------------------
   apps:
-    lakebase-ops-app:
-      name: "lakebase-ops-app"
-      description: "LakebaseOps Monitoring & Management Dashboard"
+    lakebase-ops-v2:
+      name: "lakebase-ops-v2"
+      description: "LakebaseOps Monitoring & Management Dashboard v2"
       source_code_path: ./app
 
   # ---------------------------------------------------------------------------
