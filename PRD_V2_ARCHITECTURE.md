@@ -1,8 +1,8 @@
 # LakebaseOps Platform — V2 Architecture & Implementation Reference
 
-**Version:** 2.0
-**Last Updated:** 2026-02-21
-**Status:** Implemented & Tested (all 47 tools, 3 agents, 81+ tests passing)
+**Version:** 2.2
+**Last Updated:** 2026-03-11
+**Status:** Implemented & Tested (51 tools, 3 agents, 8 source engines, 3 dashboard enrichments)
 
 ---
 
@@ -76,39 +76,130 @@ All three monolithic agent files (~800+ lines each) have been refactored into su
 
 ---
 
+## I-C. Summary of Changes from V2.1 to V2.2
+
+### 11. Amazon DynamoDB Source Engine (7 -> 8)
+
+Added DynamoDB as the first NoSQL source engine, introducing cross-engine (NoSQL-to-relational) migration assessment:
+
+| Engine | Cloud | Type | Key Features |
+|--------|-------|------|-------------|
+| Amazon DynamoDB | AWS | NoSQL | GSI/LSI, Streams, TTL, PITR, DAX, Global Tables, on-demand/provisioned billing |
+
+**ENGINE_KIND discriminator:** New `ENGINE_KIND` dictionary in `config/migration_profiles.py` classifies engines as `pg` or `nosql`, enabling conditional logic throughout the assessment pipeline.
+
+**DynamoDB-specific DatabaseProfile fields:** `billing_mode`, `gsi_count`, `lsi_count`, `streams_enabled`, `ttl_enabled`, `pitr_enabled`, `global_table_regions`, `item_size_avg_bytes`, `dynamo_table_details` (all `Optional`, `None` for PostgreSQL engines).
+
+**Files changed:**
+- `config/migration_profiles.py` - Added `DYNAMODB` to `SourceEngine`, `ENGINE_KIND` map, DynamoDB-specific fields to `DatabaseProfile`
+- `agents/provisioning/assessment.py` - Added `_mock_discover_dynamodb()`, `_mock_workload_dynamodb()`, conditional summary fields for NoSQL
+- `utils/readiness_scorer.py` - Added `DYNAMODB_FEATURE_SUPPORT`, `DYNAMODB_FEATURE_WORKAROUNDS`, NoSQL scoring paths for all 6 dimensions
+- `utils/blueprint_generator.py` - DynamoDB engine maps, `CROSS_ENGINE` strategy, DynamoDB-specific phases (relational modeling, S3 export, ETL, app rewrite)
+- `config/pricing.py` - DynamoDB on-demand pricing entry with WRU/RRU formulas
+- `app/backend/routers/assessment.py` - Feature matrix for NoSQL, DynamoDB cost estimation
+- `app/frontend/src/pages/Assessment.tsx` - DynamoDB engine option, conditional discovery display, `NOSQL_ENGINES` set
+- `app/frontend/src/components/ExtensionMatrix.tsx` - Conditional "Feature Compatibility" title for NoSQL
+- `test_assessment.py` - 4 new DynamoDB tests (discovery, readiness, blueprint, end-to-end)
+
+---
+
+## I-B. Summary of Changes from V2.0 to V2.1
+
+### 7. Expanded Source Engine Support (5 -> 7)
+
+Added two new source database engines to the `SourceEngine` enum and all dependent modules:
+
+| Engine | Cloud | Key Extensions / Features |
+|--------|-------|--------------------------|
+| AlloyDB for PostgreSQL | GCP | `google_ml_integration`, `pgvector`, columnar engine, IAM auth |
+| Supabase PostgreSQL | Multi | `pg_graphql`, `pgjwt`, `supautils`, platform-managed auth/storage/realtime schemas |
+
+**Files changed:**
+- `config/migration_profiles.py` - Added `ALLOYDB_POSTGRESQL` and `SUPABASE_POSTGRESQL` to `SourceEngine` enum
+- `agents/provisioning/assessment.py` - Added `_mock_discover_alloydb()` and `_mock_discover_supabase()` with engine-specific extension profiles and edge cases
+- `utils/blueprint_generator.py` - Updated engine labels, auth migration notes, pooling notes, decommission steps, and network prerequisites for both engines
+- `utils/readiness_scorer.py` - Added `pgjwt` and `supautils` to `EXTENSION_WORKAROUNDS`
+
+### 8. Dashboard Enrichment Widgets
+
+Three new visualization components added to the Assessment and Dashboard pages:
+
+**Extension Compatibility Matrix** (`app/frontend/src/components/ExtensionMatrix.tsx`)
+- Displays each discovered extension with version, Lakebase support status (supported / workaround / unsupported), and detailed notes
+- Color-coded status chips with summary counts
+- Backend endpoint: `GET /api/assessment/extension-matrix/{profile_id}`
+
+**Migration Timeline Gantt** (`app/frontend/src/components/GanttChart.tsx`)
+- Horizontal bar chart (Recharts) showing 4 migration phases with start day, duration, total effort
+- Displays strategy and risk level per phase with color-coded chips
+- Backend endpoint: `GET /api/assessment/timeline/{profile_id}`
+
+**Cost Estimation Widget** (`app/frontend/src/components/CostEstimate.tsx`)
+- Side-by-side cost comparison: source engine monthly cost vs Lakebase DBU pricing
+- Breakdown by compute, storage, and I/O with formula tooltips on hover
+- Displays pricing disclaimer, version, region, instance reference, and source URL links
+- Backend endpoint: `GET /api/assessment/cost-estimate/{profile_id}`
+
+### 9. Static Pricing Registry (`config/pricing.py`)
+
+Centralized, auditable pricing configuration replacing hardcoded values:
+
+- `PRICING_VERSION` - date-stamped version for tracking when rates were last verified
+- `PRICING_DISCLAIMER` - standard disclaimer text displayed on all cost widgets
+- `SOURCE_ENGINES` - per-engine pricing with `instance_ref`, `source_url`, `last_verified`, and per-region rates (compute/storage/I/O)
+- `LAKEBASE_PRICING` - DBU and DSU rates per region with formulas
+- `CLOUD_REGIONS` - available regions per cloud provider (AWS, GCP, Azure)
+- `ENGINE_CLOUD_MAP` - maps each engine to its cloud provider
+- Helper functions: `get_source_rates()`, `get_lakebase_rates()`, `get_regions_for_engine()`
+
+### 10. Dynamic Region Selection
+
+The Assessment UI dynamically updates available regions based on the selected source engine:
+- Engine selection triggers `GET /api/assessment/regions/{engine}` to fetch available regions
+- Region dropdown populates with cloud-specific regions (e.g., AWS regions for Aurora, GCP regions for AlloyDB)
+- Selected region flows through to cost estimation for accurate per-region pricing
+- A `default` fallback rate is provided when a specific region is not in the registry
+
+---
+
 ## II. Project Structure
 
 ```
 lakebase-ops-platform/
-├── main.py                          # Orchestrator — runs full 5-phase simulation
-├── deploy_and_test.py               # Real deployment & 81+ test suite
+├── main.py                          # Orchestrator - runs full 5-phase simulation
+├── deploy_and_test.py               # Real deployment & test suite
+├── test_assessment.py               # Assessment pipeline unit tests
 ├── ENHANCED_PROMPT.md               # Original PRD (updated for PG17)
 ├── PRD_V2_ARCHITECTURE.md           # This document
-│
+|
 ├── config/
 │   ├── __init__.py
-│   └── settings.py                  # All constants: workspace, catalog, tables, thresholds
-│
+│   ├── settings.py                  # All constants: workspace, catalog, tables, thresholds
+│   ├── migration_profiles.py        # Assessment dataclasses + SourceEngine enum (8 engines)
+│   └── pricing.py                   # Static pricing registry: per-engine, per-region rates + formulas
+|
 ├── framework/
 │   ├── __init__.py
 │   └── agent_framework.py           # BaseAgent, AgentFramework, EventType, TaskResult
-│
+|
 ├── sql/
 │   ├── __init__.py
-│   └── queries.py                   # 21 named SQL constants (single source of truth)
-│
+│   ├── queries.py                   # 21 named SQL constants (single source of truth)
+│   └── assessment_queries.py        # Assessment discovery + profiling SQL
+|
 ├── agents/
 │   ├── __init__.py                  # Re-exports: ProvisioningAgent, PerformanceAgent, HealthAgent
-│   │
-│   ├── provisioning/                # 17 tools
+│   |
+│   ├── provisioning/                # 17+ tools
 │   │   ├── __init__.py
 │   │   ├── agent.py                 # ProvisioningAgent class, register_tools(), run_cycle()
 │   │   ├── project.py               # ProjectMixin: provision_lakebase_project, create_ops_catalog
 │   │   ├── branching.py             # BranchingMixin: create/protect/enforce_ttl/monitor/reset branches
 │   │   ├── migration.py             # MigrationMixin: apply_migration, capture_schema_diff, test_migration
 │   │   ├── cicd.py                  # CICDMixin: setup_cicd_pipeline
-│   │   └── governance.py            # GovernanceMixin: configure_rls, uc_integration, ai_branching
-│   │
+│   │   ├── governance.py            # GovernanceMixin: configure_rls, uc_integration, ai_branching
+│   │   └── assessment.py            # AssessmentMixin: 4-step pipeline, 7 engine-specific mocks
+│   |
 │   ├── performance/                 # 14 tools
 │   │   ├── __init__.py
 │   │   ├── agent.py                 # PerformanceAgent class, register_tools(), run_cycle()
@@ -116,7 +207,7 @@ lakebase-ops-platform/
 │   │   ├── indexes.py               # IndexMixin: 6 detect methods + run_full_index_analysis
 │   │   ├── maintenance.py           # MaintenanceMixin: vacuum, txid wraparound, autovacuum tuning
 │   │   └── optimization.py          # OptimizationMixin: AI query analysis, capacity forecasting
-│   │
+│   |
 │   └── health/                      # 16 tools
 │       ├── __init__.py
 │       ├── agent.py                 # HealthAgent class, register_tools(), run_cycle()
@@ -125,17 +216,37 @@ lakebase-ops-platform/
 │       ├── archival.py              # ArchivalMixin: cold_data, archive_to_delta, unified_view
 │       ├── connections.py           # ConnectionMixin: monitor, terminate_idle
 │       └── operations.py            # OperationsMixin: cost, scale_to_zero, diagnose, self_heal, nl_dba
-│
+|
 ├── utils/
 │   ├── __init__.py
 │   ├── lakebase_client.py           # OAuth-aware PG client with mock mode
 │   ├── delta_writer.py              # Unity Catalog Delta writer with mock mode
-│   └── alerting.py                  # Multi-channel alert manager (Slack, PagerDuty, DBSQL)
-│
+│   ├── alerting.py                  # Multi-channel alert manager (Slack, PagerDuty, DBSQL)
+│   ├── readiness_scorer.py          # 6-dimension readiness scoring + extension workarounds
+│   └── blueprint_generator.py       # Engine-aware 4-phase migration blueprint
+|
+├── app/                             # Databricks App (FastAPI + React)
+│   ├── app.yaml
+│   ├── backend/
+│   │   ├── main.py                  # FastAPI entry point (SPA + API)
+│   │   └── routers/
+│   │       └── assessment.py        # Assessment + enrichment endpoints (9 routes)
+│   └── frontend/
+│       └── src/
+│           ├── pages/
+│           │   ├── Dashboard.tsx     # KPI overview + Gantt + cost summary
+│           │   └── Assessment.tsx    # 4-step wizard + enrichment widgets
+│           ├── components/
+│           │   ├── GanttChart.tsx    # Migration timeline Gantt (Recharts)
+│           │   ├── ExtensionMatrix.tsx # Extension compatibility matrix
+│           │   └── CostEstimate.tsx  # Cost comparison with formulas + disclaimer
+│           └── hooks/
+│               └── useApiData.ts    # Polling data fetcher with retry
+|
 ├── jobs/
 │   ├── __init__.py
 │   └── databricks_job_definitions.py # Databricks Jobs configurations
-│
+|
 └── tests/
     └── __init__.py
 ```
@@ -166,6 +277,7 @@ class PerformanceAgent(MetricsMixin, IndexMixin, MaintenanceMixin, OptimizationM
 | | MigrationMixin | `migration.py` | apply_schema_migration, capture_schema_diff, test_migration_on_branch |
 | | CICDMixin | `cicd.py` | setup_cicd_pipeline |
 | | GovernanceMixin | `governance.py` | configure_rls, setup_uc_integration, setup_ai_branching, provision_with_governance |
+| | AssessmentMixin | `assessment.py` | connect_and_discover, profile_workload, assess_readiness, generate_migration_blueprint |
 | **Performance** | MetricsMixin | `metrics.py` | persist_pg_stat_statements, collect_pg_stat_statements_info |
 | | IndexMixin | `indexes.py` | detect_unused/bloated/missing/duplicate/missing_fk, run_full_index_analysis |
 | | MaintenanceMixin | `maintenance.py` | identify_tables_needing_vacuum, schedule_vacuum_analyze/full, check_txid, tune_autovacuum |
@@ -272,29 +384,33 @@ CREATE TABLE IF NOT EXISTS {catalog}.{schema}.pg_stat_history (
 
 ---
 
-## VII. Tool Inventory (47 Total)
+## VII. Tool Inventory (51 Total)
 
-### Provisioning & DevOps Agent (17 tools)
+### Provisioning & DevOps Agent (21 tools)
 
 | Tool | Schedule | Risk | Approval | Module |
 |------|----------|------|----------|--------|
-| `provision_lakebase_project` | — | low | no | project.py |
-| `create_ops_catalog` | — | low | no | project.py |
-| `create_branch` | — | low | no | branching.py |
-| `protect_branch` | — | medium | no | branching.py |
+| `provision_lakebase_project` | - | low | no | project.py |
+| `create_ops_catalog` | - | low | no | project.py |
+| `create_branch` | - | low | no | branching.py |
+| `protect_branch` | - | medium | no | branching.py |
 | `enforce_ttl_policies` | `0 */6 * * *` | low | no | branching.py |
 | `monitor_branch_count` | `0 */6 * * *` | low | no | branching.py |
 | `reset_branch_from_parent` | `0 2 * * *` | low | no | branching.py |
-| `create_branch_on_pr` | — | low | no | branching.py |
-| `delete_branch_on_pr_close` | — | low | no | branching.py |
-| `apply_schema_migration` | — | medium | no | migration.py |
-| `capture_schema_diff` | — | low | no | migration.py |
-| `test_migration_on_branch` | — | low | no | migration.py |
-| `setup_cicd_pipeline` | — | low | no | cicd.py |
-| `configure_rls` | — | high | **yes** | governance.py |
-| `setup_unity_catalog_integration` | — | low | no | governance.py |
-| `setup_ai_agent_branching` | — | low | no | governance.py |
-| `provision_with_governance` | — | low | no | governance.py |
+| `create_branch_on_pr` | - | low | no | branching.py |
+| `delete_branch_on_pr_close` | - | low | no | branching.py |
+| `apply_schema_migration` | - | medium | no | migration.py |
+| `capture_schema_diff` | - | low | no | migration.py |
+| `test_migration_on_branch` | - | low | no | migration.py |
+| `setup_cicd_pipeline` | - | low | no | cicd.py |
+| `configure_rls` | - | high | **yes** | governance.py |
+| `setup_unity_catalog_integration` | - | low | no | governance.py |
+| `setup_ai_agent_branching` | - | low | no | governance.py |
+| `provision_with_governance` | - | low | no | governance.py |
+| `connect_and_discover` | - | low | no | assessment.py |
+| `profile_workload` | - | low | no | assessment.py |
+| `assess_readiness` | - | low | no | assessment.py |
+| `generate_migration_blueprint` | - | low | no | assessment.py |
 
 ### Performance & Optimization Agent (14 tools)
 
@@ -342,7 +458,7 @@ CREATE TABLE IF NOT EXISTS {catalog}.{schema}.pg_stat_history (
 
 ```
 Simulation Results:
-  3 Agents | 47 Tools | 8 Events | 59 Records Written
+  3 Agents | 51 Tools | 8 Events | 59 Records Written
 
   ProvisioningAgent: 3/3 succeeded (100.0%)
   PerformanceAgent:  14/14 succeeded (100.0%)
@@ -356,6 +472,15 @@ Simulation Results:
     - sync_validation_history: 2 records
     - vacuum_history: 4 records
 
+Assessment Coverage:
+  - 8 source engines tested (Aurora, RDS, Cloud SQL, Azure, Self-Managed, AlloyDB, Supabase, DynamoDB)
+  - Per-engine extension/feature profiles verified (unique extensions per PG engine, feature matrix for DynamoDB)
+  - Region-aware cost estimation verified across AWS, GCP, Azure regions
+  - Extension compatibility matrix validated (supported/workaround/unsupported)
+  - DynamoDB feature compatibility matrix validated (Streams, TTL, DAX, Global Tables)
+  - DynamoDB cross-engine blueprint verified (relational modeling, S3 export, ETL, app rewrite)
+  - Pricing formulas verified against config/pricing.py registry (including DynamoDB WRU/RRU)
+
 Verification:
   - No information_schema references in agents/
   - No "lost on scale" references in codebase
@@ -365,7 +490,101 @@ Verification:
 
 ---
 
-## IX. Migration Guide (V1 → V2)
+## IX. Assessment API & Enrichment Architecture
+
+### Endpoint Map
+
+| Method | Route | Source | Description |
+|--------|-------|--------|-------------|
+| `POST` | `/api/assessment/discover` | `assessment.py` | Run discovery (schema, extensions, edge cases) |
+| `POST` | `/api/assessment/profile/{id}` | `assessment.py` | Profile workload (QPS, TPS, connections) |
+| `POST` | `/api/assessment/readiness/{id}` | `assessment.py` | Score readiness (6 dimensions) |
+| `POST` | `/api/assessment/blueprint/{id}` | `assessment.py` | Generate 4-phase migration blueprint |
+| `GET` | `/api/assessment/extension-matrix/{id}` | `assessment.py` | Extension (PG) or feature (DynamoDB) compatibility matrix |
+| `GET` | `/api/assessment/timeline/{id}` | `assessment.py` | Migration timeline for Gantt chart |
+| `GET` | `/api/assessment/cost-estimate/{id}` | `assessment.py` | Region-aware cost comparison |
+| `GET` | `/api/assessment/regions/{engine}` | `assessment.py` | Available regions for engine |
+| `GET` | `/api/assessment/history` | `assessment.py` | List past assessment profiles |
+
+### Cost Estimation Data Flow
+
+```
+Assessment.tsx                    Backend                         config/pricing.py
++------------------+    POST     +--------------------+          +------------------+
+| Select engine    |------------>| /discover          |          | SOURCE_ENGINES   |
+| Select region    |    GET      | /regions/{engine}  |<-------->| CLOUD_REGIONS    |
+| Run blueprint    |------------>| /blueprint/{id}    |          | ENGINE_CLOUD_MAP |
+|                  |    GET      | /cost-estimate/{id}|<-------->| LAKEBASE_PRICING |
+|                  |<------------|                    |          | get_source_rates |
+| CostEstimate.tsx |             | Computes:          |          | get_lakebase_rates|
+| - Disclaimer     |             |  source_compute    |          +------------------+
+| - Formula tips   |             |  source_storage    |
+| - Region/version |             |  source_io         |
+| - Source links   |             |  lakebase_compute  |
++------------------+             |  lakebase_storage  |
+                                 +--------------------+
+```
+
+### Pricing Registry Schema (`config/pricing.py`)
+
+```python
+SOURCE_ENGINES = {
+    "aurora-postgresql": {
+        "label": "Aurora PostgreSQL",
+        "cloud": "aws",
+        "instance_ref": "db.r6g.xlarge",
+        "source_url": "https://aws.amazon.com/rds/aurora/pricing/",
+        "last_verified": "2026-03",
+        "regions": {
+            "us-east-1": {"compute_per_hour": ..., "storage_per_gb_month": ..., "io_per_million": ...},
+            "default": {...}
+        },
+        "formulas": {
+            "compute": "compute_per_hour x 730 hours/month",
+            "storage": "storage_per_gb_month x estimated_gb",
+            "io": "io_per_million x estimated_million_requests"
+        }
+    },
+    ...
+}
+```
+
+### SourceEngine Enum (8 engines)
+
+```python
+class SourceEngine(Enum):
+    AURORA_POSTGRESQL = "aurora-postgresql"
+    RDS_POSTGRESQL = "rds-postgresql"
+    CLOUD_SQL_POSTGRESQL = "cloud-sql-postgresql"
+    AZURE_POSTGRESQL = "azure-postgresql"
+    SELF_MANAGED_POSTGRESQL = "self-managed-postgresql"
+    ALLOYDB_POSTGRESQL = "alloydb-postgresql"
+    SUPABASE_POSTGRESQL = "supabase-postgresql"
+    AURORA_MYSQL = "aurora-mysql"
+    DYNAMODB = "dynamodb"
+```
+
+### ENGINE_KIND Discriminator
+
+```python
+ENGINE_KIND: dict[str, str] = {
+    "dynamodb": "nosql",
+    "aurora-postgresql": "pg",
+    "rds-postgresql": "pg",
+    "cloud-sql-postgresql": "pg",
+    "azure-postgresql": "pg",
+    "self-managed-postgresql": "pg",
+    "alloydb-postgresql": "pg",
+    "supabase-postgresql": "pg",
+    "aurora-mysql": "pg",
+}
+```
+
+Used throughout the assessment pipeline to branch between PostgreSQL and NoSQL logic.
+
+---
+
+## X. Migration Guide (V1 -> V2)
 
 ### Import Changes
 ```python

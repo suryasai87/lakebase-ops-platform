@@ -4,7 +4,7 @@ AGENTS = [
     {
         "name": "ProvisioningAgent",
         "description": "Day 0/Day 1: Database setup, branching, schema migrations, CI/CD, governance",
-        "tool_count": 17,
+        "tool_count": 21,
         "icon": "build",
         "color": "#1976d2",
         "tools": [
@@ -25,6 +25,10 @@ AGENTS = [
             {"name": "setup_unity_catalog_integration", "module": "governance", "schedule": None, "risk": "low"},
             {"name": "setup_ai_agent_branching", "module": "governance", "schedule": None, "risk": "low"},
             {"name": "provision_with_governance", "module": "governance", "schedule": None, "risk": "medium"},
+            {"name": "connect_and_discover", "module": "assessment", "schedule": None, "risk": "low"},
+            {"name": "profile_workload", "module": "assessment", "schedule": None, "risk": "low"},
+            {"name": "assess_readiness", "module": "assessment", "schedule": None, "risk": "low"},
+            {"name": "generate_migration_blueprint", "module": "assessment", "schedule": None, "risk": "low"},
         ],
     },
     {

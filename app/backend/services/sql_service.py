@@ -6,8 +6,8 @@ import logging
 
 logger = logging.getLogger("lakebase_ops_app.sql")
 
-WAREHOUSE_ID = os.getenv("SQL_WAREHOUSE_ID", "8e4258d7fe74671b")
-CATALOG = os.getenv("OPS_CATALOG", "hls_amer_catalog")
+WAREHOUSE_ID = os.getenv("SQL_WAREHOUSE_ID", "")
+CATALOG = os.getenv("OPS_CATALOG", "ops_catalog")
 SCHEMA = os.getenv("OPS_SCHEMA", "lakebase_ops")
 
 _client = None
@@ -61,3 +61,8 @@ def get_cached(key: str, fetch_func, ttl: int = 60):
     _cache[key] = data
     _cache_time[key] = now
     return data
+
+
+def cached_query(key: str, sql: str, ttl: int = 60) -> list[dict]:
+    """Shorthand: execute SQL with TTL caching."""
+    return get_cached(key, lambda: execute_query(sql), ttl=ttl)

@@ -15,6 +15,7 @@ import SpeedIcon from "@mui/icons-material/Speed";
 import StorageIcon from "@mui/icons-material/Storage";
 import BuildIcon from "@mui/icons-material/Build";
 import MonitorHeartIcon from "@mui/icons-material/MonitorHeart";
+import SwapHorizIcon from "@mui/icons-material/SwapHoriz";
 
 const NAV = [
   { label: "Dashboard", path: "/", icon: <DashboardIcon /> },
@@ -23,6 +24,7 @@ const NAV = [
   { label: "Indexes", path: "/indexes", icon: <StorageIcon /> },
   { label: "Operations", path: "/operations", icon: <BuildIcon /> },
   { label: "Live Stats", path: "/live", icon: <MonitorHeartIcon /> },
+  { label: "Assessment", path: "/assessment", icon: <SwapHorizIcon /> },
 ];
 
 export default function Sidebar({ width }: { width: number }) {

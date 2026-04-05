@@ -1,20 +1,25 @@
-import { Box, Typography, Grid, CircularProgress } from "@mui/material";
+import { Box, Typography, Grid, Skeleton, Alert } from "@mui/material";
 import DataTable from "../components/DataTable";
-import StatusBadge from "../components/StatusBadge";
 import { useApiData } from "../hooks/useApiData";
 
 export default function Performance() {
-  const { data: queries, loading: qLoading } = useApiData<any[]>(
+  const { data: queries, loading: qLoading, error: qError } = useApiData<any[]>(
     "/api/performance/queries?hours=24&limit=10"
   );
-  const { data: regressions, loading: rLoading } = useApiData<any[]>(
+  const { data: regressions, loading: rLoading, error: rError } = useApiData<any[]>(
     "/api/performance/regressions"
   );
 
+  if (qError || rError) {
+    return <Alert severity="error" sx={{ mt: 2 }}>Failed to load performance data: {qError || rError}</Alert>;
+  }
+
   if (qLoading || rLoading) {
     return (
-      <Box sx={{ display: "flex", justifyContent: "center", mt: 10 }}>
-        <CircularProgress color="primary" />
+      <Box>
+        <Skeleton variant="text" width={200} height={40} sx={{ mb: 2 }} />
+        <Skeleton variant="rounded" height={300} sx={{ mb: 3 }} />
+        <Skeleton variant="rounded" height={300} />
       </Box>
     );
   }
@@ -34,6 +39,7 @@ export default function Performance() {
             title="Top 10 Slowest Queries (24h)"
             columns={[
               { key: "queryid", label: "Query ID" },
+              { key: "query", label: "Query" },
               { key: "total_calls", label: "Calls" },
               { key: "avg_exec_time_ms", label: "Avg (ms)" },
               { key: "total_time_ms", label: "Total (ms)" },

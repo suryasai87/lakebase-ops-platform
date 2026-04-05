@@ -326,13 +326,18 @@ class LakebaseClient:
         path = f"/api/2.0/postgres/projects/{project_id}/branches/{branch_id}"
         return self._api_request("GET", path)
 
-    def api_generate_db_credential(self, endpoint_id: str) -> str:
-        """Generate OAuth database credential for Lakebase endpoint via REST API."""
+    def api_generate_db_credential(self, endpoint_name: str) -> str:
+        """Generate OAuth database credential for a Lakebase endpoint.
+
+        Args:
+            endpoint_name: Full resource name, e.g.
+                ``projects/{project_id}/branches/{branch_id}/endpoints/{endpoint_id}``
+        """
         if self.mock_mode:
             return f"mock_db_cred_{int(time.time())}"
-        body = {"endpoint_id": endpoint_id}
-        resp = self._api_request("POST", "/api/2.0/postgres/credentials/generate", body)
-        return resp.get("password", resp.get("token", ""))
+        body = {"endpoint": endpoint_name}
+        resp = self._api_request("POST", "/api/2.0/postgres/credentials", body)
+        return resp.get("token", "")
 
     def get_pg_connection(self, host: str, password: str, port: int = 5432,
                           dbname: str = "databricks_postgres") -> Any:

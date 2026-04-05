@@ -12,6 +12,10 @@ Supports:
 from __future__ import annotations
 
 import logging
+import os
+
+_OPS_CATALOG = os.getenv("OPS_CATALOG", "ops_catalog")
+_OPS_SCHEMA = os.getenv("OPS_SCHEMA", "lakebase_ops")
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -189,9 +193,9 @@ class AlertManager:
         return [
             {
                 "name": "Lakebase Cache Hit Ratio Warning",
-                "query": """
+                "query": f"""
                     SELECT project_id, branch_id, metric_value
-                    FROM ops_catalog.lakebase_ops.lakebase_metrics
+                    FROM {_OPS_CATALOG}.{_OPS_SCHEMA}.lakebase_metrics
                     WHERE metric_name = 'cache_hit_ratio'
                       AND metric_value < 0.99
                       AND snapshot_timestamp > CURRENT_TIMESTAMP - INTERVAL 10 MINUTES
@@ -201,9 +205,9 @@ class AlertManager:
             },
             {
                 "name": "Lakebase Cache Hit Ratio Critical",
-                "query": """
+                "query": f"""
                     SELECT project_id, branch_id, metric_value
-                    FROM ops_catalog.lakebase_ops.lakebase_metrics
+                    FROM {_OPS_CATALOG}.{_OPS_SCHEMA}.lakebase_metrics
                     WHERE metric_name = 'cache_hit_ratio'
                       AND metric_value < 0.95
                       AND snapshot_timestamp > CURRENT_TIMESTAMP - INTERVAL 10 MINUTES
@@ -213,9 +217,9 @@ class AlertManager:
             },
             {
                 "name": "Lakebase Dead Tuple Ratio Critical",
-                "query": """
+                "query": f"""
                     SELECT project_id, branch_id, metric_value
-                    FROM ops_catalog.lakebase_ops.lakebase_metrics
+                    FROM {_OPS_CATALOG}.{_OPS_SCHEMA}.lakebase_metrics
                     WHERE metric_name = 'dead_tuple_ratio'
                       AND metric_value > 0.25
                       AND snapshot_timestamp > CURRENT_TIMESTAMP - INTERVAL 10 MINUTES
@@ -225,9 +229,9 @@ class AlertManager:
             },
             {
                 "name": "Lakebase Connection Utilization Warning",
-                "query": """
+                "query": f"""
                     SELECT project_id, branch_id, metric_value
-                    FROM ops_catalog.lakebase_ops.lakebase_metrics
+                    FROM {_OPS_CATALOG}.{_OPS_SCHEMA}.lakebase_metrics
                     WHERE metric_name = 'connection_utilization'
                       AND metric_value > 0.70
                       AND snapshot_timestamp > CURRENT_TIMESTAMP - INTERVAL 10 MINUTES
@@ -237,9 +241,9 @@ class AlertManager:
             },
             {
                 "name": "Lakebase TXID Wraparound Risk",
-                "query": """
+                "query": f"""
                     SELECT project_id, branch_id, metric_value
-                    FROM ops_catalog.lakebase_ops.lakebase_metrics
+                    FROM {_OPS_CATALOG}.{_OPS_SCHEMA}.lakebase_metrics
                     WHERE metric_name = 'txid_age'
                       AND metric_value > 500000000
                       AND snapshot_timestamp > CURRENT_TIMESTAMP - INTERVAL 10 MINUTES
@@ -249,9 +253,9 @@ class AlertManager:
             },
             {
                 "name": "Lakebase Sync Freshness Alert",
-                "query": """
+                "query": f"""
                     SELECT source_table, target_table, freshness_lag_seconds
-                    FROM ops_catalog.lakebase_ops.sync_validation_history
+                    FROM {_OPS_CATALOG}.{_OPS_SCHEMA}.sync_validation_history
                     WHERE freshness_lag_seconds > 3600
                       AND validated_at > CURRENT_TIMESTAMP - INTERVAL 30 MINUTES
                 """,

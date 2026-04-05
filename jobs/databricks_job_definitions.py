@@ -15,6 +15,8 @@ PRD Schedule Reference:
 - Cost Tracker: Daily 6 AM
 """
 
+import os
+
 JOB_DEFINITIONS = {
     "metric_collector": {
         "name": "LakebaseOps - Metric Collector",
@@ -174,12 +176,15 @@ JOB_DEFINITIONS = {
 
 def generate_databricks_yml():
     """Generate databricks.yml for Asset Bundle deployment."""
-    return """
+    host = os.getenv("DATABRICKS_HOST", "")
+    if host and not host.startswith("http"):
+        host = f"https://{host}"
+    return f"""
 bundle:
   name: lakebase-ops-platform
 
 workspace:
-  host: https://fe-vm-hls-amer.cloud.databricks.com
+  host: {host}
 
 resources:
   jobs:
@@ -257,13 +262,13 @@ targets:
   dev:
     default: true
     workspace:
-      host: https://fe-vm-hls-amer.cloud.databricks.com
+      host: {host}
 
   staging:
     workspace:
-      host: https://fe-vm-hls-amer.cloud.databricks.com
+      host: {host}
 
   prod:
     workspace:
-      host: https://fe-vm-hls-amer.cloud.databricks.com
+      host: {host}
 """

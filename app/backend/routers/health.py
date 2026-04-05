@@ -6,7 +6,7 @@ from ..services.sql_service import execute_query
 router = APIRouter(prefix="/api", tags=["health"])
 
 
-@router.get("/health")
+@router.get("/health", operation_id="health_check")
 def health_check():
     """Basic health check — verifies SQL warehouse connectivity."""
     try:

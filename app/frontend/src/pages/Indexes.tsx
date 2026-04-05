@@ -1,4 +1,4 @@
-import { Box, Typography, Grid, Chip, Card, CardContent, CircularProgress } from "@mui/material";
+import { Box, Typography, Grid, Chip, Card, CardContent, Skeleton, Alert } from "@mui/material";
 import { motion } from "framer-motion";
 import { useApiData } from "../hooks/useApiData";
 
@@ -9,12 +9,23 @@ const confidenceColor: Record<string, string> = {
 };
 
 export default function Indexes() {
-  const { data: recs, loading } = useApiData<any[]>("/api/indexes/recommendations");
+  const { data: recs, loading, error } = useApiData<any[]>("/api/indexes/recommendations");
+
+  if (error) {
+    return <Alert severity="error" sx={{ mt: 2 }}>Failed to load index recommendations: {error}</Alert>;
+  }
 
   if (loading) {
     return (
-      <Box sx={{ display: "flex", justifyContent: "center", mt: 10 }}>
-        <CircularProgress color="primary" />
+      <Box>
+        <Skeleton variant="text" width={280} height={40} sx={{ mb: 2 }} />
+        <Grid container spacing={2}>
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Grid item xs={12} sm={6} md={4} key={i}>
+              <Skeleton variant="rounded" height={140} />
+            </Grid>
+          ))}
+        </Grid>
       </Box>
     );
   }
