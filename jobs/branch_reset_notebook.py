@@ -12,8 +12,8 @@
 
 # COMMAND ----------
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, "/Workspace/Repos/lakebase-ops")
 os.environ.setdefault("OPS_CATALOG", "ops_catalog")
@@ -23,24 +23,11 @@ os.environ.setdefault("OPS_SCHEMA", "lakebase_ops")
 
 from agents.provisioning.agent import ProvisioningAgent
 from agents.provisioning.policy_engine import PolicyEngine
-from config import settings
 
 # Read parameters
-project_id = (
-    dbutils.widgets.get("project_id")
-    if "dbutils" in dir()
-    else os.getenv("LAKEBASE_PROJECT_ID", "")
-)
-branches_param = (
-    dbutils.widgets.get("branches")
-    if "dbutils" in dir()
-    else "staging"
-)
-dry_run = (
-    dbutils.widgets.get("dry_run") == "true"
-    if "dbutils" in dir()
-    else False
-)
+project_id = dbutils.widgets.get("project_id") if "dbutils" in dir() else os.getenv("LAKEBASE_PROJECT_ID", "")
+branches_param = dbutils.widgets.get("branches") if "dbutils" in dir() else "staging"
+dry_run = dbutils.widgets.get("dry_run") == "true" if "dbutils" in dir() else False
 
 branches_to_reset = [b.strip() for b in branches_param.split(",") if b.strip()]
 
@@ -63,10 +50,7 @@ if not reset_config.get("enabled", False):
         sys.exit(0)
 
 # Build mapping of branch -> reset source from policy
-policy_branches = {
-    entry["name"]: entry["reset_from"]
-    for entry in reset_config.get("branches", [])
-}
+policy_branches = {entry["name"]: entry["reset_from"] for entry in reset_config.get("branches", [])}
 
 print(f"Policy-defined reset branches: {policy_branches}")
 print(f"Requested branches: {branches_to_reset}")
@@ -104,9 +88,9 @@ for branch_name in branches_to_reset:
     print(f"Resetting '{branch_name}' from '{source_branch}'...")
     try:
         # Use the provisioning agent for consistent tracking
-        from utils.lakebase_client import LakebaseClient
-        from utils.delta_writer import DeltaWriter
         from utils.alerting import AlertManager
+        from utils.delta_writer import DeltaWriter
+        from utils.lakebase_client import LakebaseClient
 
         client = LakebaseClient()
         writer = DeltaWriter()
@@ -145,4 +129,5 @@ print(f"\nTotal: {total} | Succeeded: {succeeded} | Failed: {failed} | Blocked: 
 
 if "dbutils" in dir():
     import json
+
     dbutils.notebook.exit(json.dumps({"total": total, "succeeded": succeeded, "failed": failed}))

@@ -20,10 +20,9 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from typing import Optional
 
-from framework.agent_framework import EventType
 from config.settings import TTL_POLICIES
+from framework.agent_framework import EventType
 
 logger = logging.getLogger("lakebase_ops.provisioning")
 
@@ -40,6 +39,7 @@ class BranchingMixin:
         if not hasattr(self, "_policy_engine"):
             try:
                 from agents.provisioning.policy_engine import PolicyEngine
+
                 self._policy_engine = PolicyEngine()
             except Exception:
                 self._policy_engine = None
@@ -51,34 +51,43 @@ class BranchingMixin:
         branch_id: str,
         event_type: str,
         source_branch: str = "",
-        ttl_seconds: Optional[int] = None,
+        ttl_seconds: int | None = None,
         is_protected: bool = False,
         reason: str = "",
         creator_type: str = "agent",
     ) -> None:
         """Write a branch_lifecycle Delta row with attribution (GAP-040)."""
-        self.writer.write_metrics("branch_lifecycle", [{
-            "event_id": str(uuid.uuid4())[:8],
-            "project_id": project_id,
-            "branch_id": branch_id,
-            "event_type": event_type,
-            "source_branch": source_branch,
-            "ttl_seconds": ttl_seconds,
-            "is_protected": is_protected,
-            "actor": self.name,
-            "reason": reason,
-            "creator_type": creator_type,  # GAP-040: human / agent / ci
-        }])
+        self.writer.write_metrics(
+            "branch_lifecycle",
+            [
+                {
+                    "event_id": str(uuid.uuid4())[:8],
+                    "project_id": project_id,
+                    "branch_id": branch_id,
+                    "event_type": event_type,
+                    "source_branch": source_branch,
+                    "ttl_seconds": ttl_seconds,
+                    "is_protected": is_protected,
+                    "actor": self.name,
+                    "reason": reason,
+                    "creator_type": creator_type,  # GAP-040: human / agent / ci
+                }
+            ],
+        )
 
     # ------------------------------------------------------------------
     # Core branch CRUD
     # ------------------------------------------------------------------
 
-    def create_branch(self, project_id: str, branch_name: str,
-                      branch_type: str = "ephemeral",
-                      source_branch: str = "development",
-                      ttl_seconds: Optional[int] = None,
-                      creator_type: str = "agent") -> dict:
+    def create_branch(
+        self,
+        project_id: str,
+        branch_name: str,
+        branch_type: str = "ephemeral",
+        source_branch: str = "development",
+        ttl_seconds: int | None = None,
+        creator_type: str = "agent",
+    ) -> dict:
         """
         Create a branch with proper naming and TTL.
         Implements Tasks 8-15 based on branch type.
@@ -125,7 +134,8 @@ class BranchingMixin:
                         break
 
         result = self.client.create_branch(
-            project_id, branch_name,
+            project_id,
+            branch_name,
             source_branch=source_branch,
             ttl_seconds=ttl_seconds,
         )
@@ -142,12 +152,15 @@ class BranchingMixin:
             creator_type=creator_type,
         )
 
-        self.emit_event(EventType.BRANCH_CREATED, {
-            "project_id": project_id,
-            "branch_id": branch_name,
-            "branch_type": branch_type,
-            "creator_type": creator_type,
-        })
+        self.emit_event(
+            EventType.BRANCH_CREATED,
+            {
+                "project_id": project_id,
+                "branch_id": branch_name,
+                "branch_type": branch_type,
+                "creator_type": creator_type,
+            },
+        )
 
         return result
 
@@ -163,10 +176,13 @@ class BranchingMixin:
             reason="Branch protection applied",
         )
 
-        self.emit_event(EventType.BRANCH_PROTECTED, {
-            "project_id": project_id,
-            "branch_id": branch_id,
-        })
+        self.emit_event(
+            EventType.BRANCH_PROTECTED,
+            {
+                "project_id": project_id,
+                "branch_id": branch_id,
+            },
+        )
 
         return {"project_id": project_id, "branch_id": branch_id, "protected": success}
 
@@ -211,18 +227,21 @@ class BranchingMixin:
 
         if utilization >= 0.8:
             from utils.alerting import Alert, AlertSeverity
+
             severity = AlertSeverity.CRITICAL if utilization >= 0.9 else AlertSeverity.WARNING
-            self.alerts.send_alert(Alert(
-                alert_id=str(uuid.uuid4())[:8],
-                severity=severity,
-                title=f"Branch count at {count}/{max_limit}",
-                message=f"Project {project_id} has {count} active branches ({utilization:.0%} of limit)",
-                source_agent=self.name,
-                metric_name="branch_count",
-                metric_value=count,
-                threshold=max_limit,
-                project_id=project_id,
-            ))
+            self.alerts.send_alert(
+                Alert(
+                    alert_id=str(uuid.uuid4())[:8],
+                    severity=severity,
+                    title=f"Branch count at {count}/{max_limit}",
+                    message=f"Project {project_id} has {count} active branches ({utilization:.0%} of limit)",
+                    source_agent=self.name,
+                    metric_name="branch_count",
+                    metric_value=count,
+                    threshold=max_limit,
+                    project_id=project_id,
+                )
+            )
 
         return {
             "project_id": project_id,
@@ -267,7 +286,8 @@ class BranchingMixin:
         """Create ephemeral branch when PR opened. PRD FR-06."""
         branch_name = f"ci-pr-{pr_number}"
         return self.create_branch(
-            project_id, branch_name,
+            project_id,
+            branch_name,
             branch_type="ci",
             source_branch="staging",
             ttl_seconds=TTL_POLICIES["ci"],
@@ -301,10 +321,13 @@ class BranchingMixin:
             creator_type="ci",
         )
 
-        self.emit_event(EventType.BRANCH_DELETED, {
-            "project_id": project_id,
-            "branch_id": branch_name,
-        })
+        self.emit_event(
+            EventType.BRANCH_DELETED,
+            {
+                "project_id": project_id,
+                "branch_id": branch_name,
+            },
+        )
 
         return {"branch": branch_name, "deleted": success}
 
@@ -443,8 +466,8 @@ class BranchingMixin:
         self,
         project_id: str,
         version: str,
-        source_branch: Optional[str] = None,
-        ttl_seconds: Optional[int] = None,
+        source_branch: str | None = None,
+        ttl_seconds: int | None = None,
     ) -> dict:
         """
         Create a QA validation branch for a release candidate (GAP-039).
@@ -489,7 +512,7 @@ class BranchingMixin:
         self,
         project_id: str,
         branch_id: str,
-        parent_branch: Optional[str] = None,
+        parent_branch: str | None = None,
     ) -> dict:
         """
         Reset any branch back to its parent state (GAP-039).

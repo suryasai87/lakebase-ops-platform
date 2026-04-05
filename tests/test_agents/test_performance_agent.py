@@ -2,8 +2,7 @@
 
 import pytest
 
-from framework.agent_framework import TaskStatus, EventType
-
+from framework.agent_framework import TaskStatus
 
 PROJECT = "test-proj"
 BRANCH = "production"
@@ -12,6 +11,7 @@ BRANCH = "production"
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
+
 
 class TestToolRegistration:
     def test_all_tools_registered(self, registered_performance_agent):
@@ -48,6 +48,7 @@ class TestToolRegistration:
 # MetricsMixin
 # ---------------------------------------------------------------------------
 
+
 class TestMetricsMixin:
     def test_persist_pg_stat_statements(self, registered_performance_agent, mock_writer):
         result = registered_performance_agent.persist_pg_stat_statements(PROJECT, BRANCH)
@@ -59,7 +60,7 @@ class TestMetricsMixin:
         assert any("pg_stat_history" in w["table"] for w in log)
 
     def test_persist_pg_stat_statements_write_records_match(self, registered_performance_agent, mock_writer):
-        result = registered_performance_agent.persist_pg_stat_statements(PROJECT, BRANCH)
+        registered_performance_agent.persist_pg_stat_statements(PROJECT, BRANCH)
         writes = [w for w in mock_writer.get_write_log() if "pg_stat_history" in w["table"]]
         assert writes[-1]["records"] == 3
 
@@ -72,6 +73,7 @@ class TestMetricsMixin:
 # ---------------------------------------------------------------------------
 # IndexMixin
 # ---------------------------------------------------------------------------
+
 
 class TestIndexMixin:
     def test_detect_unused_indexes(self, registered_performance_agent):
@@ -122,6 +124,7 @@ class TestIndexMixin:
 # MaintenanceMixin
 # ---------------------------------------------------------------------------
 
+
 class TestMaintenanceMixin:
     def test_identify_tables_needing_vacuum(self, registered_performance_agent):
         result = registered_performance_agent.identify_tables_needing_vacuum(PROJECT, BRANCH)
@@ -131,9 +134,7 @@ class TestMaintenanceMixin:
         assert result["tables_needing_vacuum"] >= 1 or result["tables_needing_vacuum_full"] >= 1
 
     def test_schedule_vacuum_analyze(self, registered_performance_agent, mock_writer):
-        result = registered_performance_agent.schedule_vacuum_analyze(
-            PROJECT, BRANCH, tables=["orders", "events"]
-        )
+        result = registered_performance_agent.schedule_vacuum_analyze(PROJECT, BRANCH, tables=["orders", "events"])
         assert result["tables_vacuumed"] == 2
         assert result["tables_failed"] == 0
         # Verify vacuum_history written
@@ -171,6 +172,7 @@ class TestMaintenanceMixin:
 # OptimizationMixin
 # ---------------------------------------------------------------------------
 
+
 class TestOptimizationMixin:
     def test_analyze_slow_queries_with_ai(self, registered_performance_agent):
         result = registered_performance_agent.analyze_slow_queries_with_ai(PROJECT, BRANCH)
@@ -194,6 +196,7 @@ class TestOptimizationMixin:
 # run_cycle
 # ---------------------------------------------------------------------------
 
+
 class TestRunCycle:
     @pytest.mark.asyncio
     async def test_run_cycle_default(self, registered_performance_agent):
@@ -205,9 +208,11 @@ class TestRunCycle:
 
     @pytest.mark.asyncio
     async def test_run_cycle_multi_branch(self, registered_performance_agent):
-        results = await registered_performance_agent.run_cycle({
-            "project_id": PROJECT,
-            "branches": ["production", "staging"],
-        })
+        results = await registered_performance_agent.run_cycle(
+            {
+                "project_id": PROJECT,
+                "branches": ["production", "staging"],
+            }
+        )
         # 2 branches * 6 per-branch tools + 2 global = 14
         assert len(results) >= 13

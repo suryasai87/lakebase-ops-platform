@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 
 # Add project root to path
 sys.path.insert(0, ".")
@@ -30,9 +29,9 @@ from utils.lakebase_client import LakebaseClient
 
 
 def banner(msg: str) -> None:
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  {msg}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 def step(num: int, title: str) -> None:
@@ -74,7 +73,8 @@ def run_demo(mock_mode: bool = True) -> None:
     print(f"Production branch: {prod.get('status', 'unknown')}")
 
     feat = client.create_branch(
-        project_id, branch_name,
+        project_id,
+        branch_name,
         source_branch="production",
         ttl_seconds=604800,  # 7 days
     )
@@ -92,14 +92,16 @@ def run_demo(mock_mode: bool = True) -> None:
     # Step 4: Schema diff
     step(4, "Run schema diff (branch vs production)")
     branch_schema = client.execute_query(
-        project_id, branch_name,
+        project_id,
+        branch_name,
         "SELECT table_name, column_name, data_type FROM information_schema.columns "
-        "WHERE table_schema = 'public' ORDER BY table_name, ordinal_position"
+        "WHERE table_schema = 'public' ORDER BY table_name, ordinal_position",
     )
     prod_schema = client.execute_query(
-        project_id, "production",
+        project_id,
+        "production",
         "SELECT table_name, column_name, data_type FROM information_schema.columns "
-        "WHERE table_schema = 'public' ORDER BY table_name, ordinal_position"
+        "WHERE table_schema = 'public' ORDER BY table_name, ordinal_position",
     )
     print(f"Branch columns: {len(branch_schema)}")
     print(f"Production columns: {len(prod_schema)}")
@@ -112,10 +114,7 @@ def run_demo(mock_mode: bool = True) -> None:
 
     # Step 6: Check replication lag
     step(6, "Monitor replication lag")
-    repl_data = client.execute_query(
-        project_id, "production",
-        "SELECT * FROM pg_stat_replication LIMIT 1"
-    )
+    repl_data = client.execute_query(project_id, "production", "SELECT * FROM pg_stat_replication LIMIT 1")
     if repl_data:
         pp(repl_data[0])
     else:
@@ -136,7 +135,7 @@ def run_demo(mock_mode: bool = True) -> None:
     print("\nResources created (mock):")
     print(f"  - Project: {project_id}")
     print(f"  - Tags: {list(tags.keys())}")
-    print(f"  - UC Catalog: demo_agile_workflow")
+    print("  - UC Catalog: demo_agile_workflow")
     print(f"  - Feature branch: {branch_name} (deleted)")
 
 

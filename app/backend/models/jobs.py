@@ -1,6 +1,5 @@
 """Response models for the jobs router."""
 
-from typing import Optional
 from pydantic import BaseModel
 
 
@@ -17,7 +16,7 @@ class JobListResponse(BaseModel):
     """Response for GET /api/jobs/list."""
 
     jobs: list[JobInfo]
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class TriggeredJob(BaseModel):
@@ -52,11 +51,11 @@ class RunStatus(BaseModel):
     """Status of a single job run."""
 
     run_id: int
-    job_id: Optional[int] = None
-    name: Optional[str] = None
+    job_id: int | None = None
+    name: str | None = None
     status: str
-    life_cycle_state: Optional[str] = None
-    result_state: Optional[str] = None
+    life_cycle_state: str | None = None
+    result_state: str | None = None
     message: str = ""
 
 
@@ -65,4 +64,4 @@ class PollSyncStatusResponse(BaseModel):
 
     runs: list[RunStatus]
     overall: str
-    error: Optional[str] = None
+    error: str | None = None

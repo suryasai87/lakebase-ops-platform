@@ -1,6 +1,5 @@
 """Response models for the performance router."""
 
-from typing import Optional
 from pydantic import BaseModel
 
 
@@ -26,7 +25,7 @@ class RegressionEntry(BaseModel):
     queryid: str
     baseline_ms: str
     recent_ms: str
-    pct_change: Optional[str] = None
+    pct_change: str | None = None
     status: str
 
 

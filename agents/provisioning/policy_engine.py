@@ -12,21 +12,19 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
 logger = logging.getLogger("lakebase_ops.provisioning.policy")
 
 # Default path to the policy file, relative to repo root
-_DEFAULT_POLICY_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "config", "branch_policies.yaml"
-)
+_DEFAULT_POLICY_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config", "branch_policies.yaml")
 
 
 @dataclass
 class PolicyViolation:
     """A single policy violation."""
+
     rule: str
     message: str
     severity: str = "error"  # "error" or "warning"
@@ -35,6 +33,7 @@ class PolicyViolation:
 @dataclass
 class PolicyResult:
     """Result of a policy evaluation."""
+
     allowed: bool
     violations: list[PolicyViolation] = field(default_factory=list)
     warnings: list[PolicyViolation] = field(default_factory=list)
@@ -65,7 +64,7 @@ class PolicyEngine:
             raise ValueError(result.violations)
     """
 
-    def __init__(self, policy_path: Optional[str] = None):
+    def __init__(self, policy_path: str | None = None):
         self._path = policy_path or _DEFAULT_POLICY_PATH
         self._policies: dict = {}
         self._load()
@@ -85,10 +84,7 @@ class PolicyEngine:
         with open(path) as fh:
             self._policies = yaml.safe_load(fh) or {}
 
-        logger.info(
-            f"Loaded branch policies v{self._policies.get('version', 'unknown')} "
-            f"from {path}"
-        )
+        logger.info(f"Loaded branch policies v{self._policies.get('version', 'unknown')} from {path}")
 
     def reload(self) -> None:
         """Re-read the policy file (hot-reload)."""
@@ -126,7 +122,7 @@ class PolicyEngine:
     def nightly_reset_config(self) -> dict:
         return self._policies.get("nightly_reset", {})
 
-    def get_ttl_for_prefix(self, branch_name: str) -> Optional[int]:
+    def get_ttl_for_prefix(self, branch_name: str) -> int | None:
         """Return the TTL (seconds) for a branch name based on its prefix."""
         for prefix, ttl in self.ttl_policies.items():
             if branch_name.startswith(prefix):
@@ -174,10 +170,12 @@ class PolicyEngine:
         protected = self.protection_rules.get("protected_branches", [])
 
         if branch_name in protected and self.protection_rules.get("prevent_deletion", True):
-            violations.append(PolicyViolation(
-                rule="protection_rules.prevent_deletion",
-                message=f"Branch '{branch_name}' is protected and cannot be deleted",
-            ))
+            violations.append(
+                PolicyViolation(
+                    rule="protection_rules.prevent_deletion",
+                    message=f"Branch '{branch_name}' is protected and cannot be deleted",
+                )
+            )
 
         return PolicyResult(allowed=len(violations) == 0, violations=violations)
 
@@ -190,21 +188,24 @@ class PolicyEngine:
         if branch_name in allowed_sources:
             expected_source = allowed_sources[branch_name]
             if source_branch != expected_source:
-                violations.append(PolicyViolation(
-                    rule="protection_rules.allowed_reset_sources",
-                    message=(
-                        f"Branch '{branch_name}' can only be reset from "
-                        f"'{expected_source}', not '{source_branch}'"
-                    ),
-                ))
+                violations.append(
+                    PolicyViolation(
+                        rule="protection_rules.allowed_reset_sources",
+                        message=(
+                            f"Branch '{branch_name}' can only be reset from '{expected_source}', not '{source_branch}'"
+                        ),
+                    )
+                )
 
         protected = self.protection_rules.get("protected_branches", [])
         if branch_name in protected and self.protection_rules.get("prevent_reset_without_approval", True):
-            warnings.append(PolicyViolation(
-                rule="protection_rules.prevent_reset_without_approval",
-                message=f"Resetting protected branch '{branch_name}' requires approval",
-                severity="warning",
-            ))
+            warnings.append(
+                PolicyViolation(
+                    rule="protection_rules.prevent_reset_without_approval",
+                    message=f"Resetting protected branch '{branch_name}' requires approval",
+                    severity="warning",
+                )
+            )
 
         return PolicyResult(
             allowed=len(violations) == 0,
@@ -218,13 +219,15 @@ class PolicyEngine:
         protected = self.protection_rules.get("protected_branches", [])
 
         if branch_name in protected and self.protection_rules.get("prevent_direct_migration", True):
-            violations.append(PolicyViolation(
-                rule="protection_rules.prevent_direct_migration",
-                message=(
-                    f"Direct schema migration on protected branch '{branch_name}' "
-                    f"is not allowed. Use an ephemeral branch and promote."
-                ),
-            ))
+            violations.append(
+                PolicyViolation(
+                    rule="protection_rules.prevent_direct_migration",
+                    message=(
+                        f"Direct schema migration on protected branch '{branch_name}' "
+                        f"is not allowed. Use an ephemeral branch and promote."
+                    ),
+                )
+            )
 
         return PolicyResult(allowed=len(violations) == 0, violations=violations)
 
@@ -247,25 +250,28 @@ class PolicyEngine:
         pattern = naming.get("allowed_pattern", "")
 
         if len(branch_name) > max_len:
-            violations.append(PolicyViolation(
-                rule="naming_conventions.max_length",
-                message=f"Branch name '{branch_name}' exceeds max length of {max_len}",
-            ))
+            violations.append(
+                PolicyViolation(
+                    rule="naming_conventions.max_length",
+                    message=f"Branch name '{branch_name}' exceeds max length of {max_len}",
+                )
+            )
 
         if len(branch_name) < min_len:
-            violations.append(PolicyViolation(
-                rule="naming_conventions.min_length",
-                message=f"Branch name '{branch_name}' is shorter than min length of {min_len}",
-            ))
+            violations.append(
+                PolicyViolation(
+                    rule="naming_conventions.min_length",
+                    message=f"Branch name '{branch_name}' is shorter than min length of {min_len}",
+                )
+            )
 
         if pattern and not re.match(pattern, branch_name):
-            violations.append(PolicyViolation(
-                rule="naming_conventions.allowed_pattern",
-                message=(
-                    f"Branch name '{branch_name}' does not match RFC 1123 pattern: "
-                    f"{pattern}"
-                ),
-            ))
+            violations.append(
+                PolicyViolation(
+                    rule="naming_conventions.allowed_pattern",
+                    message=(f"Branch name '{branch_name}' does not match RFC 1123 pattern: {pattern}"),
+                )
+            )
 
         # Check that a known prefix is used
         prefixes = naming.get("prefixes", {})
@@ -274,14 +280,16 @@ class PolicyEngine:
             # Protected branches (production, staging) are always allowed
             protected = self.protection_rules.get("protected_branches", [])
             if not has_prefix and branch_name not in protected:
-                warnings.append(PolicyViolation(
-                    rule="naming_conventions.prefixes",
-                    message=(
-                        f"Branch name '{branch_name}' does not start with a known "
-                        f"prefix ({', '.join(sorted(prefixes))})"
-                    ),
-                    severity="warning",
-                ))
+                warnings.append(
+                    PolicyViolation(
+                        rule="naming_conventions.prefixes",
+                        message=(
+                            f"Branch name '{branch_name}' does not start with a known "
+                            f"prefix ({', '.join(sorted(prefixes))})"
+                        ),
+                        severity="warning",
+                    )
+                )
 
     def _check_limits(
         self,
@@ -301,38 +309,42 @@ class PolicyEngine:
 
         # Hard limit: unarchived branches
         if current_unarchived >= max_unarchived:
-            violations.append(PolicyViolation(
-                rule="branch_limits.max_unarchived_branches",
-                message=(
-                    f"Cannot create branch: {current_unarchived}/{max_unarchived} "
-                    f"unarchived branches already exist"
-                ),
-            ))
+            violations.append(
+                PolicyViolation(
+                    rule="branch_limits.max_unarchived_branches",
+                    message=(
+                        f"Cannot create branch: {current_unarchived}/{max_unarchived} unarchived branches already exist"
+                    ),
+                )
+            )
 
         # Hard limit: total branches
         if current_count >= max_total:
-            violations.append(PolicyViolation(
-                rule="branch_limits.max_branches_per_project",
-                message=(
-                    f"Cannot create branch: {current_count}/{max_total} "
-                    f"total branches already exist"
-                ),
-            ))
+            violations.append(
+                PolicyViolation(
+                    rule="branch_limits.max_branches_per_project",
+                    message=(f"Cannot create branch: {current_count}/{max_total} total branches already exist"),
+                )
+            )
 
         # Soft warning thresholds
         utilization = (current_unarchived / max_unarchived * 100) if max_unarchived else 0
         if utilization >= crit_pct and current_unarchived < max_unarchived:
-            warnings.append(PolicyViolation(
-                rule="branch_limits.critical_threshold",
-                message=f"Branch utilization at {utilization:.0f}% (critical threshold: {crit_pct}%)",
-                severity="warning",
-            ))
+            warnings.append(
+                PolicyViolation(
+                    rule="branch_limits.critical_threshold",
+                    message=f"Branch utilization at {utilization:.0f}% (critical threshold: {crit_pct}%)",
+                    severity="warning",
+                )
+            )
         elif utilization >= warn_pct:
-            warnings.append(PolicyViolation(
-                rule="branch_limits.warning_threshold",
-                message=f"Branch utilization at {utilization:.0f}% (warning threshold: {warn_pct}%)",
-                severity="warning",
-            ))
+            warnings.append(
+                PolicyViolation(
+                    rule="branch_limits.warning_threshold",
+                    message=f"Branch utilization at {utilization:.0f}% (warning threshold: {warn_pct}%)",
+                    severity="warning",
+                )
+            )
 
     def _check_attribution(
         self,
@@ -345,10 +357,9 @@ class PolicyEngine:
 
         valid_types = attr.get("valid_creator_types", ["human", "agent", "ci"])
         if creator_type not in valid_types:
-            violations.append(PolicyViolation(
-                rule="attribution.valid_creator_types",
-                message=(
-                    f"Invalid creator_type '{creator_type}'. "
-                    f"Must be one of: {', '.join(valid_types)}"
-                ),
-            ))
+            violations.append(
+                PolicyViolation(
+                    rule="attribution.valid_creator_types",
+                    message=(f"Invalid creator_type '{creator_type}'. Must be one of: {', '.join(valid_types)}"),
+                )
+            )

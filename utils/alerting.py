@@ -11,21 +11,19 @@ Supports:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import smtplib
-from email.mime.text import MIMEText
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from enum import Enum
+
+import requests
 
 _OPS_CATALOG = os.getenv("OPS_CATALOG", "ops_catalog")
 _OPS_SCHEMA = os.getenv("OPS_SCHEMA", "lakebase_ops")
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Optional
-
-import requests
 
 logger = logging.getLogger("lakebase_ops.alerting")
 
@@ -47,6 +45,7 @@ class AlertSeverity(Enum):
 @dataclass
 class Alert:
     """Alert record for tracking and audit."""
+
     alert_id: str
     severity: AlertSeverity
     title: str
@@ -60,7 +59,7 @@ class Alert:
     channels_sent: list[str] = field(default_factory=list)
     sop_action: str = ""
     auto_remediated: bool = False
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def to_dict(self) -> dict:
         return {
@@ -110,10 +109,7 @@ class AlertManager:
             alert.channels_sent.append(channel.value)
 
         self._alert_history.append(alert)
-        logger.info(
-            f"[ALERT {alert.severity.value.upper()}] {alert.title} "
-            f"-> {', '.join(alert.channels_sent)}"
-        )
+        logger.info(f"[ALERT {alert.severity.value.upper()}] {alert.title} -> {', '.join(alert.channels_sent)}")
         return alert
 
     def _get_channels_for_severity(self, severity: AlertSeverity) -> list[AlertChannel]:
@@ -149,7 +145,7 @@ class AlertManager:
             logger.warning("Slack webhook_url not configured; skipping Slack alert")
             return
 
-        severity_emoji = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}
+        severity_emoji = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}  # noqa: RUF001
         emoji = severity_emoji.get(alert.severity.value, "📋")
         payload = {
             "text": f"{emoji} *[{alert.severity.value.upper()}]* {alert.title}\n{alert.message}",
@@ -161,7 +157,10 @@ class AlertManager:
                 {
                     "type": "context",
                     "elements": [
-                        {"type": "mrkdwn", "text": f"Project: `{alert.project_id}` | Branch: `{alert.branch_id}` | Agent: `{alert.source_agent}`"}
+                        {
+                            "type": "mrkdwn",
+                            "text": f"Project: `{alert.project_id}` | Branch: `{alert.branch_id}` | Agent: `{alert.source_agent}`",
+                        }
                     ],
                 },
             ],
@@ -286,7 +285,7 @@ class AlertManager:
         except Exception as exc:
             logger.error(f"Email alert failed for '{alert.title}': {exc}")
 
-    def get_alert_history(self, severity: Optional[AlertSeverity] = None) -> list[Alert]:
+    def get_alert_history(self, severity: AlertSeverity | None = None) -> list[Alert]:
         """Get alert history, optionally filtered by severity."""
         if severity:
             return [a for a in self._alert_history if a.severity == severity]

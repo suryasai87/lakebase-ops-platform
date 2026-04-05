@@ -1,8 +1,8 @@
 """SQL Service: Execute queries via Databricks SDK Statement Execution API."""
 
+import logging
 import os
 import time
-import logging
 
 logger = logging.getLogger("lakebase_ops_app.sql")
 
@@ -21,6 +21,7 @@ def get_client():
     global _client
     if _client is None:
         from databricks.sdk import WorkspaceClient
+
         _client = WorkspaceClient()
         logger.info("Databricks SDK client initialized (auto-auth)")
     return _client
@@ -46,9 +47,7 @@ def execute_query(sql: str, parameters: list[dict] | None = None) -> list[dict]:
         sdk_params = None
         if parameters:
             sdk_params = [
-                StatementParameterListItem(
-                    name=p["name"], value=str(p["value"]), type=p.get("type")
-                )
+                StatementParameterListItem(name=p["name"], value=str(p["value"]), type=p.get("type"))
                 for p in parameters
             ]
         result = client.statement_execution.execute_statement(
@@ -61,7 +60,7 @@ def execute_query(sql: str, parameters: list[dict] | None = None) -> list[dict]:
         if state == "SUCCEEDED":
             columns = [c.name for c in result.manifest.schema.columns]
             rows = result.result.data_array if result.result and result.result.data_array else []
-            return [dict(zip(columns, row)) for row in rows]
+            return [dict(zip(columns, row, strict=False)) for row in rows]
         logger.warning(f"SQL state={state}: {sql[:80]}")
         return []
     except Exception as e:

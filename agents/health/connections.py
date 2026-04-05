@@ -36,11 +36,13 @@ class ConnectionMixin:
             if isinstance(idle_sec, str):
                 idle_sec = float(idle_sec)
             if state == "idle" and idle_sec > 1800:  # 30 min
-                long_idle.append({
-                    "pid": conn.get("pid"),
-                    "idle_seconds": idle_sec,
-                    "backend_start": conn.get("backend_start"),
-                })
+                long_idle.append(
+                    {
+                        "pid": conn.get("pid"),
+                        "idle_seconds": idle_sec,
+                        "backend_start": conn.get("backend_start"),
+                    }
+                )
 
         return {
             "total_connections": sum(states.values()),
@@ -49,8 +51,7 @@ class ConnectionMixin:
             "long_idle_details": long_idle,
         }
 
-    def terminate_idle_connections(self, project_id: str, branch_id: str,
-                                    max_idle_minutes: int = 30) -> dict:
+    def terminate_idle_connections(self, project_id: str, branch_id: str, max_idle_minutes: int = 30) -> dict:
         """
         Kill sessions idle > threshold.
         UC-10: Auto-terminate on high connection utilization.
@@ -60,17 +61,17 @@ class ConnectionMixin:
 
         for session in conn_info.get("long_idle_details", []):
             pid = session.get("pid")
-            self.client.execute_statement(
-                project_id, branch_id,
-                f"SELECT pg_terminate_backend({pid})"
-            )
+            self.client.execute_statement(project_id, branch_id, f"SELECT pg_terminate_backend({pid})")
             terminated.append(pid)
 
         if terminated:
-            self.emit_event(EventType.SELF_HEAL_EXECUTED, {
-                "action": "terminate_idle_connections",
-                "pids_terminated": terminated,
-            })
+            self.emit_event(
+                EventType.SELF_HEAL_EXECUTED,
+                {
+                    "action": "terminate_idle_connections",
+                    "pids_terminated": terminated,
+                },
+            )
 
         return {
             "sessions_terminated": len(terminated),

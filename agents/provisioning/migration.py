@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import logging
 
-from framework.agent_framework import EventType
 from config.settings import TTL_POLICIES
+from framework.agent_framework import EventType
 from sql import queries
 
 logger = logging.getLogger("lakebase_ops.provisioning")
@@ -22,8 +22,7 @@ logger = logging.getLogger("lakebase_ops.provisioning")
 class MigrationMixin:
     """Mixin providing schema migration workflows."""
 
-    def apply_schema_migration(self, project_id: str, branch_id: str,
-                                migration_files: list[str] = None) -> dict:
+    def apply_schema_migration(self, project_id: str, branch_id: str, migration_files: list[str] | None = None) -> dict:
         """
         Apply idempotent DDL migrations to a branch.
         Tasks 22-24: All DDL must be idempotent.
@@ -44,11 +43,14 @@ class MigrationMixin:
             row_count = self.client.execute_statement(project_id, branch_id, ddl)
             results.append({"migration": i + 1, "ddl": ddl[:80], "status": "applied", "affected": row_count})
 
-        self.emit_event(EventType.SCHEMA_MIGRATED, {
-            "project_id": project_id,
-            "branch_id": branch_id,
-            "migrations_applied": len([r for r in results if r["status"] == "applied"]),
-        })
+        self.emit_event(
+            EventType.SCHEMA_MIGRATED,
+            {
+                "project_id": project_id,
+                "branch_id": branch_id,
+                "migrations_applied": len([r for r in results if r["status"] == "applied"]),
+            },
+        )
 
         return {
             "project_id": project_id,
@@ -88,23 +90,15 @@ class MigrationMixin:
             return True
 
         # CREATE without IF NOT EXISTS is not idempotent
-        if ddl_upper.startswith("CREATE") and "IF NOT EXISTS" not in ddl_upper:
-            return False
+        return not (ddl_upper.startswith("CREATE") and "IF NOT EXISTS" not in ddl_upper)
 
-        return True
-
-    def capture_schema_diff(self, project_id: str, source_branch: str,
-                            target_branch: str) -> dict:
+    def capture_schema_diff(self, project_id: str, source_branch: str, target_branch: str) -> dict:
         """
         Generate schema diff between two branches.
         PRD FR-08 schema comparison.
         """
-        source_schema = self.client.execute_query(
-            project_id, source_branch, queries.SCHEMA_COLUMNS
-        )
-        target_schema = self.client.execute_query(
-            project_id, target_branch, queries.SCHEMA_COLUMNS
-        )
+        self.client.execute_query(project_id, source_branch, queries.SCHEMA_COLUMNS)
+        self.client.execute_query(project_id, target_branch, queries.SCHEMA_COLUMNS)
 
         # Mock diff result
         diff = {
@@ -124,8 +118,9 @@ class MigrationMixin:
             "has_changes": any(v for v in diff.values() if v),
         }
 
-    def test_migration_on_branch(self, project_id: str, pr_number: int,
-                                  migration_files: list[str] = None) -> dict:
+    def test_migration_on_branch(
+        self, project_id: str, pr_number: int, migration_files: list[str] | None = None
+    ) -> dict:
         """
         Full 9-step migration testing workflow.
         PRD FR-08: Schema Migration Testing on Branches.
@@ -139,44 +134,55 @@ class MigrationMixin:
         results["steps"].append({"step": 2, "action": "CI/CD pipeline triggered", "status": "ok"})
 
         # Step 3: Create branch from staging
-        branch_result = self.create_branch(
-            project_id, branch_name,
+        self.create_branch(
+            project_id,
+            branch_name,
             branch_type="ci",
             source_branch="staging",
             ttl_seconds=ttl_seconds,
         )
-        results["steps"].append({"step": 3, "action": f"Branch '{branch_name}' created (TTL: {ttl_seconds}s)", "status": "ok"})
+        results["steps"].append(
+            {"step": 3, "action": f"Branch '{branch_name}' created (TTL: {ttl_seconds}s)", "status": "ok"}
+        )
 
         # Step 4: Apply migrations
         migration_result = self.apply_schema_migration(project_id, branch_name, migration_files)
-        results["steps"].append({
-            "step": 4,
-            "action": f"Migrations applied: {migration_result['total_applied']} success, {migration_result['total_rejected']} rejected",
-            "status": "ok" if migration_result["total_rejected"] == 0 else "warning",
-        })
+        results["steps"].append(
+            {
+                "step": 4,
+                "action": f"Migrations applied: {migration_result['total_applied']} success, {migration_result['total_rejected']} rejected",
+                "status": "ok" if migration_result["total_rejected"] == 0 else "warning",
+            }
+        )
 
         # Step 5: Schema Diff
         diff_result = self.capture_schema_diff(project_id, "staging", branch_name)
-        results["steps"].append({
-            "step": 5,
-            "action": f"Schema diff captured: {diff_result['diff']}",
-            "status": "ok",
-        })
+        results["steps"].append(
+            {
+                "step": 5,
+                "action": f"Schema diff captured: {diff_result['diff']}",
+                "status": "ok",
+            }
+        )
 
         # Step 6: Integration tests (mock)
         test_passed = True
-        results["steps"].append({
-            "step": 6,
-            "action": "Integration tests passed (3/3)",
-            "status": "ok" if test_passed else "failed",
-        })
+        results["steps"].append(
+            {
+                "step": 6,
+                "action": "Integration tests passed (3/3)",
+                "status": "ok" if test_passed else "failed",
+            }
+        )
 
         # Step 7: Code review includes schema diff
-        results["steps"].append({
-            "step": 7,
-            "action": "Schema diff ready for code review",
-            "status": "ok",
-        })
+        results["steps"].append(
+            {
+                "step": 7,
+                "action": "Schema diff ready for code review",
+                "status": "ok",
+            }
+        )
 
         # Steps 8-9: Handled on PR merge/close
         results["steps"].append({"step": 8, "action": "Pending: replay migrations on merge", "status": "pending"})

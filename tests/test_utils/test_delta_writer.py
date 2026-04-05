@@ -1,13 +1,11 @@
 """Tests for DeltaWriter: mock_mode write operations, catalog creation, write logging."""
 
-import pytest
-
 from utils.delta_writer import DeltaWriter
-
 
 # ---------------------------------------------------------------------------
 # Initialization
 # ---------------------------------------------------------------------------
+
 
 class TestDeltaWriterInit:
     def test_mock_mode_default(self):
@@ -28,6 +26,7 @@ class TestDeltaWriterInit:
 # ---------------------------------------------------------------------------
 # Catalog and schema creation (mock)
 # ---------------------------------------------------------------------------
+
 
 class TestCreateOpsCatalog:
     def test_create_ops_catalog_mock(self, mock_writer):
@@ -54,6 +53,7 @@ class TestCreateOpsCatalog:
 # ---------------------------------------------------------------------------
 # write_metrics (mock)
 # ---------------------------------------------------------------------------
+
 
 class TestWriteMetrics:
     def test_write_single_record(self, mock_writer):
@@ -114,6 +114,7 @@ class TestWriteMetrics:
 # write_archive
 # ---------------------------------------------------------------------------
 
+
 class TestWriteArchive:
     def test_write_archive(self, mock_writer):
         result = mock_writer.write_archive("orders_cold", [{"id": 1, "data": "archived"}])
@@ -125,6 +126,7 @@ class TestWriteArchive:
 # sql_query (mock)
 # ---------------------------------------------------------------------------
 
+
 class TestSqlQuery:
     def test_sql_query_mock_returns_empty(self, mock_writer):
         result = mock_writer.sql_query("SELECT * FROM something")
@@ -134,6 +136,7 @@ class TestSqlQuery:
 # ---------------------------------------------------------------------------
 # Write log
 # ---------------------------------------------------------------------------
+
 
 class TestWriteLog:
     def test_log_accumulates(self, mock_writer):

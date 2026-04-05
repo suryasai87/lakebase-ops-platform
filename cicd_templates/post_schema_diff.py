@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 # Lakebase schema introspection
 # ---------------------------------------------------------------------------
 
+
 def get_branch_schema(project: str, branch: str) -> dict[str, Any]:
     """
     Retrieve schema information from a Lakebase branch using the Databricks CLI.
@@ -59,7 +60,9 @@ def get_branch_schema(project: str, branch: str) -> dict[str, Any]:
     try:
         result = subprocess.run(
             ["databricks", "postgres", "get-branch", endpoint, "--output", "json"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
             timeout=30,
         )
         branch_info = json.loads(result.stdout)
@@ -76,19 +79,6 @@ def get_branch_schema(project: str, branch: str) -> dict[str, Any]:
         return {"_branch_info": branch_info, "_tables": {}}
 
     # Query information_schema for tables and columns
-    schema_query = """
-    SELECT table_name, column_name, data_type, is_nullable, column_default
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-    ORDER BY table_name, ordinal_position
-    """
-
-    index_query = """
-    SELECT indexname, tablename, indexdef
-    FROM pg_indexes
-    WHERE schemaname = 'public'
-    ORDER BY tablename, indexname
-    """
 
     tables: dict[str, dict] = {}
 
@@ -155,6 +145,7 @@ def compute_schema_diff(source_schema: dict, target_schema: dict) -> str:
 # ---------------------------------------------------------------------------
 # PR comment posting
 # ---------------------------------------------------------------------------
+
 
 def post_to_github_pr(
     owner: str,
@@ -260,10 +251,9 @@ def post_to_gitlab_mr(
 # CLI entrypoint
 # ---------------------------------------------------------------------------
 
+
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Generate Lakebase schema diff and post to PR/MR"
-    )
+    parser = argparse.ArgumentParser(description="Generate Lakebase schema diff and post to PR/MR")
     parser.add_argument("--project", required=True, help="Lakebase project name")
     parser.add_argument("--source-branch", default="staging", help="Source branch (default: staging)")
     parser.add_argument("--target-branch", required=True, help="Target branch (e.g., ci-pr-123)")

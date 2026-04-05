@@ -1,6 +1,5 @@
 """Response models for the lakebase router."""
 
-from typing import Any
 from pydantic import BaseModel
 
 

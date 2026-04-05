@@ -2,8 +2,7 @@
 
 import pytest
 
-from framework.agent_framework import TaskStatus, EventType
-
+from framework.agent_framework import TaskStatus
 
 PROJECT = "test-proj"
 BRANCH = "production"
@@ -12,6 +11,7 @@ BRANCH = "production"
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
+
 
 class TestToolRegistration:
     def test_all_tools_registered(self, registered_health_agent):
@@ -49,6 +49,7 @@ class TestToolRegistration:
 # ---------------------------------------------------------------------------
 # MonitoringMixin
 # ---------------------------------------------------------------------------
+
 
 class TestMonitoringMixin:
     def test_monitor_system_health(self, registered_health_agent, mock_writer):
@@ -149,28 +150,23 @@ class TestMonitoringMixin:
         assert result["alerts_triggered"] >= 1
 
     def test_execute_low_risk_sop_vacuum(self, registered_health_agent):
-        result = registered_health_agent.execute_low_risk_sop(
-            "high_dead_tuples", PROJECT, BRANCH, {"table": "events"}
-        )
+        result = registered_health_agent.execute_low_risk_sop("high_dead_tuples", PROJECT, BRANCH, {"table": "events"})
         assert result["status"] == "executed"
         assert "VACUUM ANALYZE" in result["action"]
 
     def test_execute_low_risk_sop_connections(self, registered_health_agent):
-        result = registered_health_agent.execute_low_risk_sop(
-            "high_connections", PROJECT, BRANCH
-        )
+        result = registered_health_agent.execute_low_risk_sop("high_connections", PROJECT, BRANCH)
         assert result["status"] == "executed"
 
     def test_execute_low_risk_sop_unknown(self, registered_health_agent):
-        result = registered_health_agent.execute_low_risk_sop(
-            "something_unknown", PROJECT, BRANCH
-        )
+        result = registered_health_agent.execute_low_risk_sop("something_unknown", PROJECT, BRANCH)
         assert result["status"] == "skipped"
 
 
 # ---------------------------------------------------------------------------
 # SyncMixin
 # ---------------------------------------------------------------------------
+
 
 class TestSyncMixin:
     def test_validate_sync_completeness(self, registered_health_agent):
@@ -200,9 +196,7 @@ class TestSyncMixin:
         assert len(sync_writes) >= 2
 
     def test_sync_drift_triggers_alert(self, registered_health_agent, mock_alerts):
-        result = registered_health_agent.validate_sync_completeness(
-            PROJECT, BRANCH, "orders", "delta_target"
-        )
+        result = registered_health_agent.validate_sync_completeness(PROJECT, BRANCH, "orders", "delta_target")
         # Mock simulates 150 row drift which is < 1000 -> healthy
         # For orders: src_count=5M, drift=150 -> healthy
         assert result["status"] == "healthy" or result["count_drift"] < 1000
@@ -211,6 +205,7 @@ class TestSyncMixin:
 # ---------------------------------------------------------------------------
 # ArchivalMixin
 # ---------------------------------------------------------------------------
+
 
 class TestArchivalMixin:
     def test_identify_cold_data(self, registered_health_agent):
@@ -221,9 +216,7 @@ class TestArchivalMixin:
         assert result["cold_candidates"] >= 1
 
     def test_archive_cold_data_to_delta(self, registered_health_agent, mock_writer):
-        result = registered_health_agent.archive_cold_data_to_delta(
-            PROJECT, BRANCH, "orders"
-        )
+        result = registered_health_agent.archive_cold_data_to_delta(PROJECT, BRANCH, "orders")
         assert result["status"] == "success"
         assert result["rows_archived"] > 0
         # Should write archival record
@@ -242,6 +235,7 @@ class TestArchivalMixin:
 # ---------------------------------------------------------------------------
 # ConnectionMixin
 # ---------------------------------------------------------------------------
+
 
 class TestConnectionMixin:
     def test_monitor_connections(self, registered_health_agent):
@@ -262,6 +256,7 @@ class TestConnectionMixin:
 # OperationsMixin
 # ---------------------------------------------------------------------------
 
+
 class TestOperationsMixin:
     def test_track_cost_attribution(self, registered_health_agent):
         result = registered_health_agent.track_cost_attribution(PROJECT)
@@ -275,29 +270,28 @@ class TestOperationsMixin:
         assert "reason" in result
 
     def test_diagnose_root_cause_cache(self, registered_health_agent):
-        result = registered_health_agent.diagnose_root_cause(
-            {"metric": "cache_hit_ratio", "value": 0.85}
-        )
+        result = registered_health_agent.diagnose_root_cause({"metric": "cache_hit_ratio", "value": 0.85})
         assert len(result["probable_causes"]) > 0
         assert len(result["recommended_actions"]) > 0
 
     def test_diagnose_root_cause_dead_tuples(self, registered_health_agent):
-        result = registered_health_agent.diagnose_root_cause(
-            {"metric": "dead_tuple_ratio", "value": 0.30}
-        )
+        result = registered_health_agent.diagnose_root_cause({"metric": "dead_tuple_ratio", "value": 0.30})
         assert result["auto_fixable"] is True
 
     def test_diagnose_root_cause_unknown(self, registered_health_agent):
-        result = registered_health_agent.diagnose_root_cause(
-            {"metric": "unknown_metric", "value": 42}
-        )
+        result = registered_health_agent.diagnose_root_cause({"metric": "unknown_metric", "value": 42})
         assert result["probable_causes"] == []
 
     def test_self_heal_low_risk(self, registered_health_agent):
         result = registered_health_agent.self_heal(
             "issue-1",
-            {"action": "vacuum orders", "risk_level": "low",
-             "project_id": PROJECT, "branch_id": BRANCH, "table": "orders"},
+            {
+                "action": "vacuum orders",
+                "risk_level": "low",
+                "project_id": PROJECT,
+                "branch_id": BRANCH,
+                "table": "orders",
+            },
         )
         assert result["status"] == "remediated"
 
@@ -327,6 +321,7 @@ class TestOperationsMixin:
 # run_cycle
 # ---------------------------------------------------------------------------
 
+
 class TestRunCycle:
     @pytest.mark.asyncio
     async def test_run_cycle_default(self, registered_health_agent):
@@ -339,9 +334,11 @@ class TestRunCycle:
 
     @pytest.mark.asyncio
     async def test_run_cycle_multi_branch(self, registered_health_agent):
-        results = await registered_health_agent.run_cycle({
-            "project_id": PROJECT,
-            "branches": ["production", "staging"],
-        })
+        results = await registered_health_agent.run_cycle(
+            {
+                "project_id": PROJECT,
+                "branches": ["production", "staging"],
+            }
+        )
         # 2 branches * 3 per-branch tools + 3 global
         assert len(results) >= 8

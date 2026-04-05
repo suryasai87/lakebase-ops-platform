@@ -5,7 +5,13 @@ that all agent and utility tests can reuse. Every fixture uses mock_mode=True
 so no real Databricks or Lakebase connections are attempted.
 """
 
+from __future__ import annotations
+
+import importlib
+import importlib.machinery
+import importlib.util
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -18,10 +24,6 @@ if _PROJECT_ROOT not in sys.path:
 # Patch config/settings.py if AlertSeverity was removed from it
 # (GAP-014: duplicate enum was deleted but config/__init__.py still references it).
 # We must inject the symbol BEFORE config package __init__.py is loaded.
-import importlib
-import importlib.util
-import importlib.machinery
-import types
 
 # Load config.settings DIRECTLY (bypassing config/__init__.py) using file path.
 _settings_path = str(Path(__file__).resolve().parent.parent / "config" / "settings.py")
@@ -49,23 +51,16 @@ if "config" not in sys.modules:
     sys.modules["config"] = _config_pkg
 
 # Now safe to import everything else.
-from utils.lakebase_client import LakebaseClient
-from utils.delta_writer import DeltaWriter
-from utils.alerting import AlertManager, Alert, AlertSeverity, AlertChannel
-from framework.agent_framework import (
-    AgentFramework,
-    BaseAgent,
-    TaskResult,
-    TaskStatus,
-    EventType,
-    Event,
-)
-from config.settings import AlertThresholds
-
+from config.settings import AlertThresholds  # noqa: E402
+from framework.agent_framework import AgentFramework  # noqa: E402
+from utils.alerting import AlertManager  # noqa: E402
+from utils.delta_writer import DeltaWriter  # noqa: E402
+from utils.lakebase_client import LakebaseClient  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Core mock objects
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def mock_client():
@@ -95,6 +90,7 @@ def alert_thresholds():
 # Agent framework fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def framework():
     """AgentFramework in mock mode."""
@@ -105,9 +101,11 @@ def framework():
 # Concrete agent fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def provisioning_agent(mock_client, mock_writer, mock_alerts):
     from agents.provisioning.agent import ProvisioningAgent
+
     agent = ProvisioningAgent(mock_client, mock_writer, mock_alerts)
     return agent
 
@@ -115,6 +113,7 @@ def provisioning_agent(mock_client, mock_writer, mock_alerts):
 @pytest.fixture
 def performance_agent(mock_client, mock_writer, mock_alerts):
     from agents.performance.agent import PerformanceAgent
+
     agent = PerformanceAgent(mock_client, mock_writer, mock_alerts)
     return agent
 
@@ -122,6 +121,7 @@ def performance_agent(mock_client, mock_writer, mock_alerts):
 @pytest.fixture
 def health_agent(mock_client, mock_writer, mock_alerts):
     from agents.health.agent import HealthAgent
+
     agent = HealthAgent(mock_client, mock_writer, mock_alerts)
     return agent
 
@@ -129,6 +129,7 @@ def health_agent(mock_client, mock_writer, mock_alerts):
 # ---------------------------------------------------------------------------
 # Helper: registered agent (tools available)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def registered_provisioning_agent(provisioning_agent, framework):

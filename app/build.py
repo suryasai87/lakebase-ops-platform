@@ -1,7 +1,7 @@
 """Build frontend and copy to static/ for serving by FastAPI."""
 
-import subprocess
 import shutil
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent

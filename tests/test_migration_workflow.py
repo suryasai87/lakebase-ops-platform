@@ -2,11 +2,11 @@
 
 import pytest
 
-from utils.lakebase_client import LakebaseClient
-from utils.delta_writer import DeltaWriter
-from utils.alerting import AlertManager
-from framework.agent_framework import AgentFramework, EventType
 from agents.provisioning.agent import ProvisioningAgent
+from framework.agent_framework import AgentFramework, EventType
+from utils.alerting import AlertManager
+from utils.delta_writer import DeltaWriter
+from utils.lakebase_client import LakebaseClient
 
 
 @pytest.fixture
@@ -26,11 +26,12 @@ def migration_env():
 # Full 9-step migration workflow
 # ---------------------------------------------------------------------------
 
+
 class TestMigrationWorkflow:
     """Test the 9-step migration testing workflow (PRD FR-08)."""
 
     def test_full_workflow_passes(self, migration_env):
-        agent, client, writer, alerts, fw = migration_env
+        agent, _client, _writer, _alerts, _fw = migration_env
         result = agent.test_migration_on_branch(project_id="proj1", pr_number=42)
 
         # Verify all 9 steps are present
@@ -53,7 +54,7 @@ class TestMigrationWorkflow:
         assert "pipeline" in step2["action"].lower()
 
     def test_step_3_branch_created(self, migration_env):
-        agent, client, writer, *_ = migration_env
+        agent, _client, _writer, *_ = migration_env
         result = agent.test_migration_on_branch("proj1", 55)
         step3 = result["steps"][2]
         assert step3["step"] == 3
@@ -72,7 +73,8 @@ class TestMigrationWorkflow:
     def test_step_4_with_custom_migrations(self, migration_env):
         agent, *_ = migration_env
         result = agent.test_migration_on_branch(
-            "proj1", 1,
+            "proj1",
+            1,
             migration_files=[
                 "CREATE TABLE IF NOT EXISTS audit_log (id SERIAL);",
                 "ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;",
@@ -84,7 +86,8 @@ class TestMigrationWorkflow:
     def test_step_4_with_rejected_migration(self, migration_env):
         agent, *_ = migration_env
         result = agent.test_migration_on_branch(
-            "proj1", 1,
+            "proj1",
+            1,
             migration_files=[
                 "CREATE TABLE IF NOT EXISTS safe_table (id INT);",
                 "DROP TABLE dangerous_table;",  # non-idempotent -> rejected
@@ -130,16 +133,17 @@ class TestMigrationWorkflow:
 # Workflow side-effects
 # ---------------------------------------------------------------------------
 
+
 class TestMigrationSideEffects:
     def test_branch_lifecycle_written(self, migration_env):
-        agent, client, writer, *_ = migration_env
+        agent, _client, writer, *_ = migration_env
         agent.test_migration_on_branch("proj1", 77)
         log = writer.get_write_log()
         lifecycle = [w for w in log if "branch_lifecycle" in w["table"]]
         assert len(lifecycle) >= 1
 
     def test_schema_migrated_event_dispatched(self, migration_env):
-        agent, client, writer, alerts, fw = migration_env
+        agent, _client, _writer, _alerts, fw = migration_env
         events_received = []
         fw.subscribe(EventType.SCHEMA_MIGRATED, lambda e: events_received.append(e))
         agent.test_migration_on_branch("proj1", 88)
@@ -147,7 +151,7 @@ class TestMigrationSideEffects:
         assert events_received[0].data["project_id"] == "proj1"
 
     def test_branch_created_event_dispatched(self, migration_env):
-        agent, client, writer, alerts, fw = migration_env
+        agent, _client, _writer, _alerts, fw = migration_env
         events_received = []
         fw.subscribe(EventType.BRANCH_CREATED, lambda e: events_received.append(e))
         agent.test_migration_on_branch("proj1", 99)
@@ -158,15 +162,18 @@ class TestMigrationSideEffects:
 # End-to-end: run_cycle with pending_migrations
 # ---------------------------------------------------------------------------
 
+
 class TestRunCycleWithMigrations:
     @pytest.mark.asyncio
     async def test_cycle_processes_migration(self, migration_env):
         agent, *_ = migration_env
-        results = await agent.run_cycle({
-            "project_id": "proj1",
-            "is_new_project": False,
-            "pending_migrations": [{"pr_number": 123}],
-        })
+        results = await agent.run_cycle(
+            {
+                "project_id": "proj1",
+                "is_new_project": False,
+                "pending_migrations": [{"pr_number": 123}],
+            }
+        )
         # Should have: enforce_ttl + monitor_branch_count + migration
         assert len(results) >= 3
         migration_result = results[-1]
@@ -175,15 +182,17 @@ class TestRunCycleWithMigrations:
     @pytest.mark.asyncio
     async def test_cycle_multiple_migrations(self, migration_env):
         agent, *_ = migration_env
-        results = await agent.run_cycle({
-            "project_id": "proj1",
-            "is_new_project": False,
-            "pending_migrations": [
-                {"pr_number": 10},
-                {"pr_number": 11},
-                {"pr_number": 12},
-            ],
-        })
+        results = await agent.run_cycle(
+            {
+                "project_id": "proj1",
+                "is_new_project": False,
+                "pending_migrations": [
+                    {"pr_number": 10},
+                    {"pr_number": 11},
+                    {"pr_number": 12},
+                ],
+            }
+        )
         # 2 maintenance + 3 migrations
         assert len(results) >= 5
 
@@ -191,6 +200,7 @@ class TestRunCycleWithMigrations:
 # ---------------------------------------------------------------------------
 # Idempotent DDL edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestIdempotentDDLEdgeCases:
     @pytest.fixture
@@ -216,14 +226,10 @@ class TestIdempotentDDLEdgeCases:
         assert agent._is_idempotent_ddl("TRUNCATE orders;") is False
 
     def test_or_replace_accepted(self, agent):
-        assert agent._is_idempotent_ddl(
-            "CREATE OR REPLACE VIEW v AS SELECT 1;"
-        ) is True
+        assert agent._is_idempotent_ddl("CREATE OR REPLACE VIEW v AS SELECT 1;") is True
 
     def test_alter_add_column_if_not_exists_accepted(self, agent):
-        assert agent._is_idempotent_ddl(
-            "ALTER TABLE t ADD COLUMN IF NOT EXISTS c INT;"
-        ) is True
+        assert agent._is_idempotent_ddl("ALTER TABLE t ADD COLUMN IF NOT EXISTS c INT;") is True
 
     def test_insert_accepted(self, agent):
         assert agent._is_idempotent_ddl("INSERT INTO t VALUES (1);") is True

@@ -1,15 +1,13 @@
 """Tests for ProvisioningAgent: all provisioning tools in mock_mode."""
 
-import asyncio
-
 import pytest
 
-from framework.agent_framework import TaskStatus, EventType
-
+from framework.agent_framework import TaskStatus
 
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
+
 
 class TestToolRegistration:
     def test_all_tools_registered(self, registered_provisioning_agent):
@@ -51,11 +49,10 @@ class TestToolRegistration:
 # ProjectMixin tools
 # ---------------------------------------------------------------------------
 
+
 class TestProjectMixin:
     def test_provision_lakebase_project(self, registered_provisioning_agent):
-        result = registered_provisioning_agent.provision_lakebase_project(
-            project_name="test-proj", domain="healthcare"
-        )
+        result = registered_provisioning_agent.provision_lakebase_project(project_name="test-proj", domain="healthcare")
         assert result["status"] == "provisioned"
         assert result["project"] == "test-proj"
         assert result["domain"] == "healthcare"
@@ -66,9 +63,7 @@ class TestProjectMixin:
         assert "development" in branch_names
 
     def test_provision_writes_branch_lifecycle(self, registered_provisioning_agent, mock_writer):
-        registered_provisioning_agent.provision_lakebase_project(
-            project_name="test-proj", domain="retail"
-        )
+        registered_provisioning_agent.provision_lakebase_project(project_name="test-proj", domain="retail")
         # Should have written lifecycle records for 3 branches
         log = mock_writer.get_write_log()
         lifecycle_writes = [w for w in log if "branch_lifecycle" in w["table"]]
@@ -85,32 +80,30 @@ class TestProjectMixin:
 # BranchingMixin tools
 # ---------------------------------------------------------------------------
 
+
 class TestBranchingMixin:
     def test_create_branch_default(self, registered_provisioning_agent):
-        result = registered_provisioning_agent.create_branch(
-            project_id="proj1", branch_name="feat-login"
-        )
+        result = registered_provisioning_agent.create_branch(project_id="proj1", branch_name="feat-login")
         assert "name" in result
         assert result["status"] == "ACTIVE"
 
     def test_create_branch_with_ttl(self, registered_provisioning_agent):
         result = registered_provisioning_agent.create_branch(
-            project_id="proj1", branch_name="ci-pr-42",
-            branch_type="ci", source_branch="staging", ttl_seconds=14400,
+            project_id="proj1",
+            branch_name="ci-pr-42",
+            branch_type="ci",
+            source_branch="staging",
+            ttl_seconds=14400,
         )
         assert result["ttl"] == 14400
 
     def test_create_branch_infers_ttl_from_prefix(self, registered_provisioning_agent):
         # Branch name starts with "ci" -> should pick TTL from TTL_POLICIES
-        result = registered_provisioning_agent.create_branch(
-            project_id="proj1", branch_name="ci-pr-99"
-        )
+        result = registered_provisioning_agent.create_branch(project_id="proj1", branch_name="ci-pr-99")
         assert result["ttl"] == 14400  # TTL_POLICIES["ci"]
 
     def test_protect_branch(self, registered_provisioning_agent):
-        result = registered_provisioning_agent.protect_branch(
-            project_id="proj1", branch_id="staging"
-        )
+        result = registered_provisioning_agent.protect_branch(project_id="proj1", branch_id="staging")
         assert result["protected"] is True
 
     def test_enforce_ttl_policies(self, registered_provisioning_agent):
@@ -120,37 +113,27 @@ class TestBranchingMixin:
         assert result["total_active"] > 0
 
     def test_monitor_branch_count_no_alert(self, registered_provisioning_agent, mock_alerts):
-        result = registered_provisioning_agent.monitor_branch_count(
-            project_id="proj1", max_limit=10
-        )
+        result = registered_provisioning_agent.monitor_branch_count(project_id="proj1", max_limit=10)
         # Mock returns 3 branches, utilization = 30% -> no alert
         assert result["branch_count"] == 3
         assert result["alert_triggered"] is False
 
     def test_monitor_branch_count_alert(self, registered_provisioning_agent, mock_alerts):
-        result = registered_provisioning_agent.monitor_branch_count(
-            project_id="proj1", max_limit=3
-        )
+        result = registered_provisioning_agent.monitor_branch_count(project_id="proj1", max_limit=3)
         # 3 branches / 3 limit = 100% -> alert triggered
         assert result["alert_triggered"] is True
         assert len(mock_alerts.get_alert_history()) > 0
 
     def test_reset_branch_from_parent(self, registered_provisioning_agent):
-        result = registered_provisioning_agent.reset_branch_from_parent(
-            project_id="proj1", branch_id="staging"
-        )
+        result = registered_provisioning_agent.reset_branch_from_parent(project_id="proj1", branch_id="staging")
         assert result["reset"] is True
 
     def test_create_branch_on_pr(self, registered_provisioning_agent):
-        result = registered_provisioning_agent.create_branch_on_pr(
-            project_id="proj1", pr_number=42
-        )
+        result = registered_provisioning_agent.create_branch_on_pr(project_id="proj1", pr_number=42)
         assert "ci-pr-42" in str(result.get("name", ""))
 
     def test_delete_branch_on_pr_close(self, registered_provisioning_agent):
-        result = registered_provisioning_agent.delete_branch_on_pr_close(
-            project_id="proj1", pr_number=42
-        )
+        result = registered_provisioning_agent.delete_branch_on_pr_close(project_id="proj1", pr_number=42)
         assert result["deleted"] is True
         assert result["branch"] == "ci-pr-42"
 
@@ -159,21 +142,21 @@ class TestBranchingMixin:
 # MigrationMixin tools
 # ---------------------------------------------------------------------------
 
+
 class TestMigrationMixin:
     def test_apply_schema_migration_default(self, registered_provisioning_agent):
-        result = registered_provisioning_agent.apply_schema_migration(
-            project_id="proj1", branch_id="ci-pr-1"
-        )
+        result = registered_provisioning_agent.apply_schema_migration(project_id="proj1", branch_id="ci-pr-1")
         assert result["total_applied"] > 0
         assert result["total_rejected"] == 0
 
     def test_apply_schema_migration_rejects_non_idempotent(self, registered_provisioning_agent):
         result = registered_provisioning_agent.apply_schema_migration(
-            project_id="proj1", branch_id="ci-pr-1",
+            project_id="proj1",
+            branch_id="ci-pr-1",
             migration_files=[
                 "DROP TABLE users;",
                 "CREATE TABLE IF NOT EXISTS safe_table (id INT);",
-            ]
+            ],
         )
         assert result["total_rejected"] == 1
         assert result["total_applied"] == 1
@@ -197,9 +180,7 @@ class TestMigrationMixin:
         assert result["has_changes"] is True
 
     def test_test_migration_on_branch_9_steps(self, registered_provisioning_agent):
-        result = registered_provisioning_agent.test_migration_on_branch(
-            project_id="proj1", pr_number=100
-        )
+        result = registered_provisioning_agent.test_migration_on_branch(project_id="proj1", pr_number=100)
         assert len(result["steps"]) == 9
         assert result["overall_status"] == "pass"
         assert result["branch_name"] == "ci-pr-100"
@@ -208,6 +189,7 @@ class TestMigrationMixin:
 # ---------------------------------------------------------------------------
 # run_cycle
 # ---------------------------------------------------------------------------
+
 
 class TestRunCycle:
     @pytest.mark.asyncio
@@ -220,29 +202,31 @@ class TestRunCycle:
 
     @pytest.mark.asyncio
     async def test_run_cycle_maintenance(self, registered_provisioning_agent):
-        results = await registered_provisioning_agent.run_cycle(
-            {"project_id": "proj1", "is_new_project": False}
-        )
+        results = await registered_provisioning_agent.run_cycle({"project_id": "proj1", "is_new_project": False})
         assert len(results) >= 2  # enforce_ttl + monitor_branch_count
 
     @pytest.mark.asyncio
     async def test_run_cycle_with_prs(self, registered_provisioning_agent):
-        results = await registered_provisioning_agent.run_cycle({
-            "project_id": "proj1",
-            "is_new_project": False,
-            "pending_prs": [
-                {"action": "opened", "number": 10},
-                {"action": "closed", "number": 5},
-            ],
-        })
+        results = await registered_provisioning_agent.run_cycle(
+            {
+                "project_id": "proj1",
+                "is_new_project": False,
+                "pending_prs": [
+                    {"action": "opened", "number": 10},
+                    {"action": "closed", "number": 5},
+                ],
+            }
+        )
         # 2 maintenance + 2 PR actions
         assert len(results) >= 4
 
     @pytest.mark.asyncio
     async def test_run_cycle_with_migrations(self, registered_provisioning_agent):
-        results = await registered_provisioning_agent.run_cycle({
-            "project_id": "proj1",
-            "is_new_project": False,
-            "pending_migrations": [{"pr_number": 77}],
-        })
+        results = await registered_provisioning_agent.run_cycle(
+            {
+                "project_id": "proj1",
+                "is_new_project": False,
+                "pending_migrations": [{"pr_number": 77}],
+            }
+        )
         assert len(results) >= 3  # 2 maintenance + 1 migration

@@ -1,6 +1,5 @@
 """Response models for the metrics router."""
 
-from typing import Optional
 from pydantic import BaseModel
 
 
@@ -11,7 +10,7 @@ class MetricSnapshot(BaseModel):
     branch_id: str
     metric_name: str
     metric_value: str
-    threshold_level: Optional[str] = None
+    threshold_level: str | None = None
     snapshot_timestamp: str
 
 

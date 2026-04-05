@@ -12,10 +12,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Optional
 
-from framework.agent_framework import EventType
 from config.settings import TTL_POLICIES
+from framework.agent_framework import EventType
 
 logger = logging.getLogger("lakebase_ops.provisioning")
 
@@ -23,11 +22,15 @@ logger = logging.getLogger("lakebase_ops.provisioning")
 class ProjectMixin:
     """Mixin providing Lakebase project creation and ops catalog setup."""
 
-    def provision_lakebase_project(self, project_name: str, domain: str,
-                                   environment: str = "production",
-                                   branching_pattern: str = "multi_env_pipeline",
-                                   tags: dict[str, str] | None = None,
-                                   budget_policy_id: str | None = None) -> dict:
+    def provision_lakebase_project(
+        self,
+        project_name: str,
+        domain: str,
+        environment: str = "production",
+        branching_pattern: str = "multi_env_pipeline",
+        tags: dict[str, str] | None = None,
+        budget_policy_id: str | None = None,
+    ) -> dict:
         """
         Create a Lakebase project with full branch hierarchy.
         Implements Setup Guide Tasks 1-15.
@@ -56,7 +59,7 @@ class ProjectMixin:
         project_spec = {}
         if budget_policy_id:
             project_spec["budget_policy_id"] = budget_policy_id
-        project_result = self.client.create_project(project_name, spec=project_spec)
+        self.client.create_project(project_name, spec=project_spec)
 
         # Apply tags via PATCH
         self.client.update_project_tags(project_name, default_tags)
@@ -65,18 +68,17 @@ class ProjectMixin:
         branches_created = []
 
         # Production branch (Task 5)
-        prod = self.client.create_branch(project_name, "production", is_protected=True)
+        self.client.create_branch(project_name, "production", is_protected=True)
         branches_created.append({"branch": "production", "type": "protected", "ttl": None})
 
         # Staging branch (Task 6)
-        staging = self.client.create_branch(project_name, "staging",
-                                            source_branch="production", is_protected=True)
+        self.client.create_branch(project_name, "staging", source_branch="production", is_protected=True)
         branches_created.append({"branch": "staging", "type": "protected", "ttl": None})
 
         # Development branch (Task 7)
-        dev = self.client.create_branch(project_name, "development",
-                                        source_branch="staging",
-                                        ttl_seconds=TTL_POLICIES.get("dev"))
+        self.client.create_branch(
+            project_name, "development", source_branch="staging", ttl_seconds=TTL_POLICIES.get("dev")
+        )
         branches_created.append({"branch": "development", "type": "ephemeral", "ttl": TTL_POLICIES.get("dev")})
 
         # Tasks 16-17: Protect production and staging
@@ -85,23 +87,31 @@ class ProjectMixin:
 
         # Log to Delta
         for branch in branches_created:
-            self.writer.write_metrics("branch_lifecycle", [{
-                "event_id": str(uuid.uuid4())[:8],
-                "project_id": project_name,
-                "branch_id": branch["branch"],
-                "event_type": "created",
-                "source_branch": "production" if branch["branch"] != "production" else "",
-                "ttl_seconds": branch["ttl"],
-                "is_protected": branch["type"] == "protected",
-                "actor": "ProvisioningAgent",
-                "reason": "Initial project setup",
-            }])
+            self.writer.write_metrics(
+                "branch_lifecycle",
+                [
+                    {
+                        "event_id": str(uuid.uuid4())[:8],
+                        "project_id": project_name,
+                        "branch_id": branch["branch"],
+                        "event_type": "created",
+                        "source_branch": "production" if branch["branch"] != "production" else "",
+                        "ttl_seconds": branch["ttl"],
+                        "is_protected": branch["type"] == "protected",
+                        "actor": "ProvisioningAgent",
+                        "reason": "Initial project setup",
+                    }
+                ],
+            )
 
         # Emit event for other agents
-        self.emit_event(EventType.PROVISIONING_COMPLETE, {
-            "project_id": project_name,
-            "branches": [b["branch"] for b in branches_created],
-        })
+        self.emit_event(
+            EventType.PROVISIONING_COMPLETE,
+            {
+                "project_id": project_name,
+                "branches": [b["branch"] for b in branches_created],
+            },
+        )
 
         return {
             "project": project_name,
@@ -130,9 +140,9 @@ class ProjectMixin:
         project_id: str,
         branch_id: str,
         action: str = "list",
-        replica_count: Optional[int] = None,
-        min_cu: Optional[float] = None,
-        max_cu: Optional[float] = None,
+        replica_count: int | None = None,
+        min_cu: float | None = None,
+        max_cu: float | None = None,
     ) -> dict:
         """
         Manage read replicas for a Lakebase branch (GAP-041).
@@ -156,21 +166,22 @@ class ProjectMixin:
         Returns:
             dict with action result and current replica state.
         """
-        MAX_REPLICAS_PER_BRANCH = 6
+        max_replicas_per_branch = 6
 
         base_path = f"projects/{project_id}/branches/{branch_id}/endpoints"
 
         if action == "list":
             endpoints = self.client.api_get(base_path)
             replicas = [
-                ep for ep in endpoints.get("endpoints", [])
+                ep
+                for ep in endpoints.get("endpoints", [])
                 if ep.get("spec", {}).get("type", "").upper() == "READ_REPLICA"
             ]
             return {
                 "project_id": project_id,
                 "branch_id": branch_id,
                 "replica_count": len(replicas),
-                "max_replicas": MAX_REPLICAS_PER_BRANCH,
+                "max_replicas": max_replicas_per_branch,
                 "replicas": [
                     {
                         "endpoint_id": r.get("name", "").split("/")[-1],
@@ -187,12 +198,11 @@ class ProjectMixin:
             current = self.manage_read_replicas(project_id, branch_id, action="list")
             current_count = current["replica_count"]
 
-            if current_count + count > MAX_REPLICAS_PER_BRANCH:
+            if current_count + count > max_replicas_per_branch:
                 return {
                     "status": "error",
                     "message": (
-                        f"Cannot add {count} replica(s): already have "
-                        f"{current_count}/{MAX_REPLICAS_PER_BRANCH}"
+                        f"Cannot add {count} replica(s): already have {current_count}/{max_replicas_per_branch}"
                     ),
                 }
 
@@ -211,23 +221,25 @@ class ProjectMixin:
                 }
                 result = self.client.api_post(base_path, json=replica_spec)
                 created.append(result)
-                logger.info(
-                    f"Created read replica {i+1}/{count} on "
-                    f"{project_id}/{branch_id}"
-                )
+                logger.info(f"Created read replica {i + 1}/{count} on {project_id}/{branch_id}")
 
-            self.writer.write_metrics("branch_lifecycle", [{
-                "event_id": str(uuid.uuid4())[:8],
-                "project_id": project_id,
-                "branch_id": branch_id,
-                "event_type": "replica_added",
-                "source_branch": "",
-                "ttl_seconds": None,
-                "is_protected": False,
-                "actor": self.name,
-                "reason": f"Added {count} read replica(s)",
-                "creator_type": "agent",
-            }])
+            self.writer.write_metrics(
+                "branch_lifecycle",
+                [
+                    {
+                        "event_id": str(uuid.uuid4())[:8],
+                        "project_id": project_id,
+                        "branch_id": branch_id,
+                        "event_type": "replica_added",
+                        "source_branch": "",
+                        "ttl_seconds": None,
+                        "is_protected": False,
+                        "actor": self.name,
+                        "reason": f"Added {count} read replica(s)",
+                        "creator_type": "agent",
+                    }
+                ],
+            )
 
             return {
                 "project_id": project_id,
@@ -253,18 +265,23 @@ class ProjectMixin:
                 removed.append(ep_id)
                 logger.info(f"Removed read replica {ep_id} from {project_id}/{branch_id}")
 
-            self.writer.write_metrics("branch_lifecycle", [{
-                "event_id": str(uuid.uuid4())[:8],
-                "project_id": project_id,
-                "branch_id": branch_id,
-                "event_type": "replica_removed",
-                "source_branch": "",
-                "ttl_seconds": None,
-                "is_protected": False,
-                "actor": self.name,
-                "reason": f"Removed {len(removed)} read replica(s)",
-                "creator_type": "agent",
-            }])
+            self.writer.write_metrics(
+                "branch_lifecycle",
+                [
+                    {
+                        "event_id": str(uuid.uuid4())[:8],
+                        "project_id": project_id,
+                        "branch_id": branch_id,
+                        "event_type": "replica_removed",
+                        "source_branch": "",
+                        "ttl_seconds": None,
+                        "is_protected": False,
+                        "actor": self.name,
+                        "reason": f"Removed {len(removed)} read replica(s)",
+                        "creator_type": "agent",
+                    }
+                ],
+            )
 
             return {
                 "project_id": project_id,
@@ -320,8 +337,8 @@ class ProjectMixin:
         project_id: str,
         branch_id: str,
         enabled: bool = True,
-        min_cu: Optional[float] = None,
-        max_cu: Optional[float] = None,
+        min_cu: float | None = None,
+        max_cu: float | None = None,
     ) -> dict:
         """
         Configure high availability (HA) for a Lakebase branch (GAP-041).
@@ -389,23 +406,28 @@ class ProjectMixin:
             patch_body["endpoint"]["spec"]["autoscaling"] = autoscaling_spec
             patch_body["update_mask"] += ",spec.autoscaling"
 
-        result = self.client.api_patch(ep_path, json=patch_body)
+        self.client.api_patch(ep_path, json=patch_body)
 
         action_str = "enabled" if enabled else "disabled"
         logger.info(f"HA {action_str} on {project_id}/{branch_id} (primary: {primary_id})")
 
-        self.writer.write_metrics("branch_lifecycle", [{
-            "event_id": str(uuid.uuid4())[:8],
-            "project_id": project_id,
-            "branch_id": branch_id,
-            "event_type": f"ha_{action_str}",
-            "source_branch": "",
-            "ttl_seconds": None,
-            "is_protected": True,
-            "actor": self.name,
-            "reason": f"High availability {action_str}",
-            "creator_type": "agent",
-        }])
+        self.writer.write_metrics(
+            "branch_lifecycle",
+            [
+                {
+                    "event_id": str(uuid.uuid4())[:8],
+                    "project_id": project_id,
+                    "branch_id": branch_id,
+                    "event_type": f"ha_{action_str}",
+                    "source_branch": "",
+                    "ttl_seconds": None,
+                    "is_protected": True,
+                    "actor": self.name,
+                    "reason": f"High availability {action_str}",
+                    "creator_type": "agent",
+                }
+            ],
+        )
 
         return {
             "project_id": project_id,

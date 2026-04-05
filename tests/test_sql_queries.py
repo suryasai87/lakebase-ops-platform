@@ -4,12 +4,12 @@ import pytest
 
 try:
     import sqlparse
+
     HAS_SQLPARSE = True
 except ImportError:
     HAS_SQLPARSE = False
 
 from sql import queries
-
 
 # Collect all SQL constants: module-level strings that look like SQL
 _SQL_CONSTANTS = {
@@ -27,8 +27,7 @@ class TestSQLQueryConstants:
     def test_expected_query_count(self):
         """Ensure we have at least 20 SQL constants (gap report says 21)."""
         assert len(_SQL_CONSTANTS) >= 20, (
-            f"Expected >= 20 SQL constants, found {len(_SQL_CONSTANTS)}: "
-            f"{sorted(_SQL_CONSTANTS.keys())}"
+            f"Expected >= 20 SQL constants, found {len(_SQL_CONSTANTS)}: {sorted(_SQL_CONSTANTS.keys())}"
         )
 
     @pytest.mark.parametrize("name,sql", sorted(_SQL_CONSTANTS.items()))
@@ -40,9 +39,7 @@ class TestSQLQueryConstants:
     def test_sql_starts_with_keyword(self, name, sql):
         first_word = sql.strip().split()[0].upper()
         valid_starts = {"SELECT", "WITH", "CREATE", "ALTER", "INSERT", "DELETE", "UPDATE"}
-        assert first_word in valid_starts, (
-            f"{name} starts with '{first_word}', expected one of {valid_starts}"
-        )
+        assert first_word in valid_starts, f"{name} starts with '{first_word}', expected one of {valid_starts}"
 
     @pytest.mark.parametrize("name,sql", sorted(_SQL_CONSTANTS.items()))
     def test_balanced_parentheses(self, name, sql):
@@ -91,13 +88,25 @@ class TestSQLQueryConstants:
 # Specific query structure checks
 # ---------------------------------------------------------------------------
 
+
 class TestSpecificQueries:
     def test_pg_stat_statements_full_columns(self):
         sql = queries.PG_STAT_STATEMENTS_FULL.upper()
-        for col in ["QUERYID", "QUERY", "CALLS", "TOTAL_EXEC_TIME", "MEAN_EXEC_TIME",
-                     "ROWS", "SHARED_BLKS_HIT", "SHARED_BLKS_READ",
-                     "WAL_RECORDS", "WAL_FPI", "WAL_BYTES",
-                     "JIT_FUNCTIONS", "JIT_GENERATION_TIME"]:
+        for col in [
+            "QUERYID",
+            "QUERY",
+            "CALLS",
+            "TOTAL_EXEC_TIME",
+            "MEAN_EXEC_TIME",
+            "ROWS",
+            "SHARED_BLKS_HIT",
+            "SHARED_BLKS_READ",
+            "WAL_RECORDS",
+            "WAL_FPI",
+            "WAL_BYTES",
+            "JIT_FUNCTIONS",
+            "JIT_GENERATION_TIME",
+        ]:
             assert col in sql, f"Missing column {col} in PG_STAT_STATEMENTS_FULL"
 
     def test_unused_indexes_excludes_pk_and_unique(self):

@@ -12,8 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
-import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 logger = logging.getLogger("lakebase_ops.masking_compliance")
 
@@ -30,11 +29,7 @@ def _get_active_branches(client) -> list[dict]:
             f"/api/2.0/lakebase/projects/{PROJECT_ID}/branches",
         )
         branches = resp.get("branches", [])
-        return [
-            b for b in branches
-            if b.get("status", "").upper() == "ACTIVE"
-            and b.get("branch_id") != "main"
-        ]
+        return [b for b in branches if b.get("status", "").upper() == "ACTIVE" and b.get("branch_id") != "main"]
     except Exception as e:
         logger.error(f"Failed to list branches: {e}")
         return []
@@ -46,7 +41,7 @@ def _write_results(client, results: list[dict], warehouse_id: str) -> None:
         return
 
     fqn = f"{CATALOG}.{SCHEMA}.masking_compliance_results"
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_id = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 
     values_rows = []
     for r in results:
@@ -63,7 +58,7 @@ def _write_results(client, results: list[dict], warehouse_id: str) -> None:
         (run_id, project_id, branch_id, parent_branch_id, compliant,
          parent_policy_count, branch_policy_count, missing_policies,
          validated_at)
-    VALUES {', '.join(values_rows)}
+    VALUES {", ".join(values_rows)}
     """
     try:
         client.statement_execution.execute_statement(
@@ -104,21 +99,17 @@ def run_masking_compliance_check() -> list[dict]:
         def __init__(self, ws_client):
             self._ws = ws_client
 
-        def execute_statement(self, project_id: str, branch_id: str,
-                              sql: str) -> list[dict]:
+        def execute_statement(self, project_id: str, branch_id: str, sql: str) -> list[dict]:
             """Execute SQL against a Lakebase branch via the API."""
             try:
                 resp = self._ws.api_client.do(
                     "POST",
-                    f"/api/2.0/lakebase/projects/{project_id}"
-                    f"/branches/{branch_id}/execute",
+                    f"/api/2.0/lakebase/projects/{project_id}/branches/{branch_id}/execute",
                     body={"statement": sql},
                 )
                 return resp.get("results", [])
             except Exception as e:
-                logger.warning(
-                    f"execute_statement failed on {project_id}/{branch_id}: {e}"
-                )
+                logger.warning(f"execute_statement failed on {project_id}/{branch_id}: {e}")
                 return []
 
     adapter = _LakebaseAdapter(client)
@@ -137,26 +128,25 @@ def run_masking_compliance_check() -> list[dict]:
             results.append(result)
         except Exception as e:
             logger.error(f"Compliance check failed for branch {branch_id}: {e}")
-            results.append({
-                "project_id": PROJECT_ID,
-                "branch_id": branch_id,
-                "parent_branch_id": parent_id,
-                "compliant": False,
-                "parent_policy_count": -1,
-                "branch_policy_count": -1,
-                "missing_policies": [{"error": str(e)}],
-                "extra_policies": [],
-            })
+            results.append(
+                {
+                    "project_id": PROJECT_ID,
+                    "branch_id": branch_id,
+                    "parent_branch_id": parent_id,
+                    "compliant": False,
+                    "parent_policy_count": -1,
+                    "branch_policy_count": -1,
+                    "missing_policies": [{"error": str(e)}],
+                    "extra_policies": [],
+                }
+            )
 
     # Persist results
     if warehouse_id:
         _write_results(client, results, warehouse_id)
 
     non_compliant = [r for r in results if not r.get("compliant")]
-    logger.info(
-        f"Masking compliance complete: {len(results)} branches checked, "
-        f"{len(non_compliant)} non-compliant"
-    )
+    logger.info(f"Masking compliance complete: {len(results)} branches checked, {len(non_compliant)} non-compliant")
     return results
 
 
@@ -166,5 +156,4 @@ if __name__ == "__main__":
     results = run_masking_compliance_check()
     for r in results:
         status = "PASS" if r["compliant"] else "FAIL"
-        print(f"  [{status}] {r['branch_id']}: "
-              f"{r['branch_policy_count']}/{r['parent_policy_count']} policies")
+        print(f"  [{status}] {r['branch_id']}: {r['branch_policy_count']}/{r['parent_policy_count']} policies")

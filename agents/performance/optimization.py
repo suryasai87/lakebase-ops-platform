@@ -12,8 +12,7 @@ logger = logging.getLogger("lakebase_ops.performance")
 class OptimizationMixin:
     """Mixin for AI query optimization and capacity forecasting."""
 
-    def analyze_slow_queries_with_ai(self, project_id: str, branch_id: str,
-                                      min_mean_exec_ms: float = 5000) -> dict:
+    def analyze_slow_queries_with_ai(self, project_id: str, branch_id: str, min_mean_exec_ms: float = 5000) -> dict:
         """Analyze slow queries using Foundation Model API."""
         slow_queries = self.client.execute_query(project_id, branch_id, queries.PG_STAT_STATEMENTS_SLOW)
 

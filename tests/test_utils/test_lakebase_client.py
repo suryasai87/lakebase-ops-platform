@@ -1,10 +1,8 @@
 """Tests for LakebaseClient: mock_mode data generation, connection handling, API methods."""
 
-import pytest
 import time
 
-from utils.lakebase_client import LakebaseClient, MockConnection, OAuthToken, BranchEndpoint
-
+from utils.lakebase_client import BranchEndpoint, MockConnection, OAuthToken
 
 PROJECT = "test-project-id"
 BRANCH = "production"
@@ -13,6 +11,7 @@ BRANCH = "production"
 # ---------------------------------------------------------------------------
 # OAuthToken
 # ---------------------------------------------------------------------------
+
 
 class TestOAuthToken:
     def test_new_token_not_expired(self):
@@ -34,11 +33,10 @@ class TestOAuthToken:
 # BranchEndpoint dataclass
 # ---------------------------------------------------------------------------
 
+
 class TestBranchEndpoint:
     def test_defaults(self):
-        ep = BranchEndpoint(
-            project_id="p1", branch_id="b1", endpoint_id="e1", host="host.example.com"
-        )
+        ep = BranchEndpoint(project_id="p1", branch_id="b1", endpoint_id="e1", host="host.example.com")
         assert ep.port == 5432
         assert ep.dbname == "databricks_postgres"
         assert ep.sslmode == "require"
@@ -47,6 +45,7 @@ class TestBranchEndpoint:
 # ---------------------------------------------------------------------------
 # LakebaseClient mock mode
 # ---------------------------------------------------------------------------
+
 
 class TestClientMockMode:
     def test_init_mock_mode(self, mock_client):
@@ -94,6 +93,7 @@ class TestClientMockMode:
 # Project / Branch management (mock)
 # ---------------------------------------------------------------------------
 
+
 class TestProjectBranchMock:
     def test_create_project(self, mock_client):
         result = mock_client.create_project("my-project")
@@ -130,6 +130,7 @@ class TestProjectBranchMock:
 # REST API methods (mock)
 # ---------------------------------------------------------------------------
 
+
 class TestAPIMethodsMock:
     def test_api_list_branches(self, mock_client):
         branches = mock_client.api_list_branches(PROJECT)
@@ -156,6 +157,7 @@ class TestAPIMethodsMock:
 # ---------------------------------------------------------------------------
 # MockConnection data generation
 # ---------------------------------------------------------------------------
+
 
 class TestMockConnection:
     def test_mock_data_generated(self):

@@ -34,17 +34,22 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config.settings import (
-    WORKSPACE_HOST, SQL_WAREHOUSE_ID, OPS_CATALOG, OPS_SCHEMA, ARCHIVE_SCHEMA,
-    LAKEBASE_PROJECT_ID, LAKEBASE_PROJECT_NAME, LAKEBASE_DEFAULT_BRANCH,
-    LAKEBASE_ENDPOINT_HOST, LAKEBASE_ENDPOINT_PORT, LAKEBASE_DB_NAME,
-    TEST_BRANCHES, DELTA_TABLES,
+    ARCHIVE_SCHEMA,
+    LAKEBASE_DEFAULT_BRANCH,
+    LAKEBASE_PROJECT_ID,
+    LAKEBASE_PROJECT_NAME,
+    OPS_CATALOG,
+    OPS_SCHEMA,
+    SQL_WAREHOUSE_ID,
+    TEST_BRANCHES,
+    WORKSPACE_HOST,
 )
 
 logging.basicConfig(
@@ -58,6 +63,7 @@ logger = logging.getLogger("deploy_and_test")
 # =============================================================================
 # Test Report Tracking
 # =============================================================================
+
 
 @dataclass
 class TestResult:
@@ -74,12 +80,19 @@ class TestReport:
         self.results: list[TestResult] = []
         self.start_time = time.time()
 
-    def add(self, phase: str, name: str, status: str, message: str = "",
-            duration: float = 0.0, data: dict = None):
-        self.results.append(TestResult(
-            phase=phase, test_name=name, status=status,
-            message=message, duration_seconds=duration, data=data or {},
-        ))
+    def add(
+        self, phase: str, name: str, status: str, message: str = "", duration: float = 0.0, data: dict | None = None
+    ):
+        self.results.append(
+            TestResult(
+                phase=phase,
+                test_name=name,
+                status=status,
+                message=message,
+                duration_seconds=duration,
+                data=data or {},
+            )
+        )
 
     def print_report(self):
         elapsed = time.time() - self.start_time
@@ -124,12 +137,14 @@ class TestReport:
 # Databricks API Helpers
 # =============================================================================
 
+
 def get_databricks_token() -> str:
     """Get Databricks OAuth token via CLI."""
     result = subprocess.run(
-        ["databricks", "auth", "token", "--profile", "DEFAULT",
-         "--host", f"https://{WORKSPACE_HOST}"],
-        capture_output=True, text=True, timeout=30,
+        ["databricks", "auth", "token", "--profile", "DEFAULT", "--host", f"https://{WORKSPACE_HOST}"],
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     if result.returncode != 0:
         raise RuntimeError(f"Failed to get token: {result.stderr}")
@@ -140,6 +155,7 @@ def get_databricks_token() -> str:
 def sql_execute(statement: str, token: str, wait_timeout: str = "30s") -> dict:
     """Execute SQL via Statement Execution API."""
     import requests
+
     url = f"https://{WORKSPACE_HOST}/api/2.0/sql/statements"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     body = {
@@ -175,12 +191,13 @@ def sql_query_rows(statement: str, token: str) -> list[dict]:
     manifest = result.get("manifest", {})
     columns = [col["name"] for col in manifest.get("schema", {}).get("columns", [])]
     data_array = result.get("result", {}).get("data_array", [])
-    return [dict(zip(columns, row)) for row in data_array]
+    return [dict(zip(columns, row, strict=False)) for row in data_array]
 
 
-def lakebase_api(method: str, path: str, token: str, body: dict = None) -> dict:
+def lakebase_api(method: str, path: str, token: str, body: dict | None = None) -> dict:
     """Make Lakebase REST API call."""
     import requests
+
     url = f"https://{WORKSPACE_HOST}{path}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     resp = requests.request(method, url, headers=headers, json=body, timeout=60)
@@ -193,6 +210,7 @@ def lakebase_api(method: str, path: str, token: str, body: dict = None) -> dict:
 # =============================================================================
 # Phase 1: Infrastructure — Create ops_catalog, schemas, Delta tables
 # =============================================================================
+
 
 def phase_infrastructure(token: str, report: TestReport) -> bool:
     """Create ops_catalog, schemas, and all 7 operational Delta tables."""
@@ -209,37 +227,44 @@ def phase_infrastructure(token: str, report: TestReport) -> bool:
         state = result.get("status", {}).get("state", "")
         error_msg = result.get("status", {}).get("error", {}).get("message", "")
         if state == "SUCCEEDED":
-            report.add("Infrastructure", "Create ops_catalog", "PASS",
-                        duration=time.time() - t0)
+            report.add("Infrastructure", "Create ops_catalog", "PASS", duration=time.time() - t0)
         elif "storage" in error_msg.lower() or "INVALID_STATE" in error_msg:
             logger.warning("Cannot create ops_catalog (storage root issue), using DEFAULT_CATALOG env var")
             OPS_CATALOG = os.getenv("DEFAULT_CATALOG", "ops_catalog")
-            report.add("Infrastructure", "Create ops_catalog", "WARN",
-                        message=f"Using {OPS_CATALOG} as fallback",
-                        duration=time.time() - t0)
+            report.add(
+                "Infrastructure",
+                "Create ops_catalog",
+                "WARN",
+                message=f"Using {OPS_CATALOG} as fallback",
+                duration=time.time() - t0,
+            )
         else:
-            report.add("Infrastructure", "Create ops_catalog", "FAIL",
-                        message=error_msg, duration=time.time() - t0)
+            report.add("Infrastructure", "Create ops_catalog", "FAIL", message=error_msg, duration=time.time() - t0)
             return False
     except Exception as e:
-        report.add("Infrastructure", "Create ops_catalog", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("Infrastructure", "Create ops_catalog", "FAIL", message=str(e), duration=time.time() - t0)
         return False
 
     # 1b. Create schemas
     for schema_name in [OPS_SCHEMA, ARCHIVE_SCHEMA]:
         t0 = time.time()
         try:
-            result = sql_execute(
-                f"CREATE SCHEMA IF NOT EXISTS {OPS_CATALOG}.{schema_name}", token
-            )
+            result = sql_execute(f"CREATE SCHEMA IF NOT EXISTS {OPS_CATALOG}.{schema_name}", token)
             state = result.get("status", {}).get("state", "")
-            report.add("Infrastructure", f"Create schema {OPS_CATALOG}.{schema_name}",
-                        "PASS" if state == "SUCCEEDED" else "FAIL",
-                        duration=time.time() - t0)
+            report.add(
+                "Infrastructure",
+                f"Create schema {OPS_CATALOG}.{schema_name}",
+                "PASS" if state == "SUCCEEDED" else "FAIL",
+                duration=time.time() - t0,
+            )
         except Exception as e:
-            report.add("Infrastructure", f"Create schema {OPS_CATALOG}.{schema_name}", "FAIL",
-                        message=str(e), duration=time.time() - t0)
+            report.add(
+                "Infrastructure",
+                f"Create schema {OPS_CATALOG}.{schema_name}",
+                "FAIL",
+                message=str(e),
+                duration=time.time() - t0,
+            )
 
     # 1c. Migrate existing tables: add PG17 columns, remove compute_status
     #     Delta doesn't support DROP COLUMN without column mapping mode,
@@ -253,16 +278,25 @@ def phase_infrastructure(token: str, report: TestReport) -> bool:
         if needs_migration and col_names:
             logger.info("Migrating pg_stat_history: old schema detected, replacing with PG17 schema")
             sql_execute(f"DROP TABLE IF EXISTS {OPS_CATALOG}.{OPS_SCHEMA}.pg_stat_history", token)
-            report.add("Infrastructure", "Migrate pg_stat_history schema", "PASS",
-                        message="Dropped old schema (compute_status removed, PG17 cols added)",
-                        duration=time.time() - t0)
+            report.add(
+                "Infrastructure",
+                "Migrate pg_stat_history schema",
+                "PASS",
+                message="Dropped old schema (compute_status removed, PG17 cols added)",
+                duration=time.time() - t0,
+            )
         else:
-            report.add("Infrastructure", "Migrate pg_stat_history schema", "SKIP",
-                        message="Schema already current",
-                        duration=time.time() - t0)
+            report.add(
+                "Infrastructure",
+                "Migrate pg_stat_history schema",
+                "SKIP",
+                message="Schema already current",
+                duration=time.time() - t0,
+            )
     except Exception as e:
-        report.add("Infrastructure", "Migrate pg_stat_history schema", "WARN",
-                    message=str(e), duration=time.time() - t0)
+        report.add(
+            "Infrastructure", "Migrate pg_stat_history schema", "WARN", message=str(e), duration=time.time() - t0
+        )
 
     # 1d. Create all 7 Delta tables
     table_ddls = {
@@ -340,15 +374,16 @@ def phase_infrastructure(token: str, report: TestReport) -> bool:
             result = sql_execute(ddl, token)
             state = result.get("status", {}).get("state", "")
             if state == "SUCCEEDED":
-                report.add("Infrastructure", f"Create table {table_name}", "PASS",
-                            duration=time.time() - t0)
+                report.add("Infrastructure", f"Create table {table_name}", "PASS", duration=time.time() - t0)
             else:
                 error = result.get("status", {}).get("error", {}).get("message", "")
-                report.add("Infrastructure", f"Create table {table_name}", "FAIL",
-                            message=error, duration=time.time() - t0)
+                report.add(
+                    "Infrastructure", f"Create table {table_name}", "FAIL", message=error, duration=time.time() - t0
+                )
         except Exception as e:
-            report.add("Infrastructure", f"Create table {table_name}", "FAIL",
-                        message=str(e), duration=time.time() - t0)
+            report.add(
+                "Infrastructure", f"Create table {table_name}", "FAIL", message=str(e), duration=time.time() - t0
+            )
 
     print("  Infrastructure phase complete.")
     return True
@@ -357,6 +392,7 @@ def phase_infrastructure(token: str, report: TestReport) -> bool:
 # =============================================================================
 # Phase 2: Create Lakebase Branches
 # =============================================================================
+
 
 def phase_branches(token: str, report: TestReport) -> bool:
     """Create test branches on the existing Lakebase project."""
@@ -377,12 +413,11 @@ def phase_branches(token: str, report: TestReport) -> bool:
             name = b.get("name", b.get("branch_id", ""))
             existing_names.append(name)
         logger.info(f"Existing branches: {existing_names}")
-        report.add("Branches", "List existing branches", "PASS",
-                    duration=time.time() - t0,
-                    data={"branches": existing_names})
+        report.add(
+            "Branches", "List existing branches", "PASS", duration=time.time() - t0, data={"branches": existing_names}
+        )
     except Exception as e:
-        report.add("Branches", "List existing branches", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("Branches", "List existing branches", "FAIL", message=str(e), duration=time.time() - t0)
         existing_names = []
 
     # Create test branches
@@ -395,12 +430,12 @@ def phase_branches(token: str, report: TestReport) -> bool:
         # Check if branch already exists (by name or resource path)
         already_exists = any(branch_name in name for name in existing_names)
         if already_exists:
-            report.add("Branches", f"Create branch {branch_name}", "SKIP",
-                        message="Already exists")
+            report.add("Branches", f"Create branch {branch_name}", "SKIP", message="Already exists")
             continue
 
         try:
             import requests as req
+
             db_token = token
             url = f"https://{WORKSPACE_HOST}/api/2.0/postgres/projects/{LAKEBASE_PROJECT_ID}/branches"
             params = {"branch_id": branch_name}
@@ -416,25 +451,35 @@ def phase_branches(token: str, report: TestReport) -> bool:
             if config.get("protected"):
                 body["spec"]["is_protected"] = True
 
-            resp = req.post(url,
-                           headers={"Authorization": f"Bearer {db_token}",
-                                    "Content-Type": "application/json"},
-                           params=params, json=body, timeout=60)
+            resp = req.post(
+                url,
+                headers={"Authorization": f"Bearer {db_token}", "Content-Type": "application/json"},
+                params=params,
+                json=body,
+                timeout=60,
+            )
 
             if resp.status_code == 200:
                 result = resp.json()
-                report.add("Branches", f"Create branch {branch_name}", "PASS",
-                            duration=time.time() - t0, data=result)
+                report.add("Branches", f"Create branch {branch_name}", "PASS", duration=time.time() - t0, data=result)
             elif resp.status_code == 409 or "already exists" in resp.text.lower():
-                report.add("Branches", f"Create branch {branch_name}", "SKIP",
-                            message="Already exists", duration=time.time() - t0)
+                report.add(
+                    "Branches",
+                    f"Create branch {branch_name}",
+                    "SKIP",
+                    message="Already exists",
+                    duration=time.time() - t0,
+                )
             else:
-                report.add("Branches", f"Create branch {branch_name}", "WARN",
-                            message=f"{resp.status_code}: {resp.text[:200]}",
-                            duration=time.time() - t0)
+                report.add(
+                    "Branches",
+                    f"Create branch {branch_name}",
+                    "WARN",
+                    message=f"{resp.status_code}: {resp.text[:200]}",
+                    duration=time.time() - t0,
+                )
         except Exception as e:
-            report.add("Branches", f"Create branch {branch_name}", "WARN",
-                        message=str(e), duration=time.time() - t0)
+            report.add("Branches", f"Create branch {branch_name}", "WARN", message=str(e), duration=time.time() - t0)
 
     print("  Branch creation phase complete.")
     return True
@@ -443,6 +488,7 @@ def phase_branches(token: str, report: TestReport) -> bool:
 # =============================================================================
 # Phase 3: Generate Synthetic Data
 # =============================================================================
+
 
 def phase_synthetic_data(token: str, report: TestReport) -> bool:
     """Generate synthetic data directly via SQL (no psycopg needed).
@@ -457,7 +503,7 @@ def phase_synthetic_data(token: str, report: TestReport) -> bool:
 
     project_id = LAKEBASE_PROJECT_NAME
     branch_id = LAKEBASE_DEFAULT_BRANCH
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     # 3a. Seed pg_stat_history with synthetic snapshots
     t0 = time.time()
@@ -466,7 +512,13 @@ def phase_synthetic_data(token: str, report: TestReport) -> bool:
         queries = [
             ("SELECT * FROM orders WHERE customer_id = $1", 15000, 45000.0, 3.0, 75000),
             ("INSERT INTO events (type, data) VALUES ($1, $2)", 50000, 25000.0, 0.5, 50000),
-            ("SELECT o.*, p.name FROM orders o JOIN products p ON o.product_id = p.id WHERE o.status = $1", 8000, 160000.0, 20.0, 40000),
+            (
+                "SELECT o.*, p.name FROM orders o JOIN products p ON o.product_id = p.id WHERE o.status = $1",
+                8000,
+                160000.0,
+                20.0,
+                40000,
+            ),
             ("UPDATE orders SET status = $1 WHERE id = $2", 12000, 36000.0, 3.0, 12000),
             ("DELETE FROM events WHERE created_at < $1", 500, 75000.0, 150.0, 250000),
         ]
@@ -493,29 +545,54 @@ def phase_synthetic_data(token: str, report: TestReport) -> bool:
             VALUES {values}"""
         result = sql_execute(insert_sql, token)
         state = result.get("status", {}).get("state", "")
-        report.add("SyntheticData", "Seed pg_stat_history",
-                    "PASS" if state == "SUCCEEDED" else "FAIL",
-                    message=f"{len(pg_stat_records)} records",
-                    duration=time.time() - t0)
+        report.add(
+            "SyntheticData",
+            "Seed pg_stat_history",
+            "PASS" if state == "SUCCEEDED" else "FAIL",
+            message=f"{len(pg_stat_records)} records",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("SyntheticData", "Seed pg_stat_history", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("SyntheticData", "Seed pg_stat_history", "FAIL", message=str(e), duration=time.time() - t0)
 
     # 3b. Seed index_recommendations
     t0 = time.time()
     try:
         idx_records = []
         recommendations = [
-            ("orders", "public", "drop_unused", "idx_orders_old_status",
-             "status", "high", "Reclaim 50.0 MB",
-             "DROP INDEX CONCURRENTLY IF EXISTS idx_orders_old_status;", "pending_review"),
-            ("events", "public", "drop_unused", "idx_events_legacy_type",
-             "type", "medium", "Reclaim 200.0 MB",
-             "DROP INDEX CONCURRENTLY IF EXISTS idx_events_legacy_type;", "pending_review"),
-            ("orders", "public", "create_missing", None,
-             "product_id,status", "high", "90% query improvement",
-             "CREATE INDEX CONCURRENTLY idx_orders_product_status ON orders(product_id, status);",
-             "pending_review"),
+            (
+                "orders",
+                "public",
+                "drop_unused",
+                "idx_orders_old_status",
+                "status",
+                "high",
+                "Reclaim 50.0 MB",
+                "DROP INDEX CONCURRENTLY IF EXISTS idx_orders_old_status;",
+                "pending_review",
+            ),
+            (
+                "events",
+                "public",
+                "drop_unused",
+                "idx_events_legacy_type",
+                "type",
+                "medium",
+                "Reclaim 200.0 MB",
+                "DROP INDEX CONCURRENTLY IF EXISTS idx_events_legacy_type;",
+                "pending_review",
+            ),
+            (
+                "orders",
+                "public",
+                "create_missing",
+                None,
+                "product_id,status",
+                "high",
+                "90% query improvement",
+                "CREATE INDEX CONCURRENTLY idx_orders_product_status ON orders(product_id, status);",
+                "pending_review",
+            ),
         ]
         for table, schema, rec_type, idx_name, cols, conf, impact, ddl, status in recommendations:
             rid = str(uuid.uuid4())[:8]
@@ -534,13 +611,15 @@ def phase_synthetic_data(token: str, report: TestReport) -> bool:
             VALUES {values}"""
         result = sql_execute(insert_sql, token)
         state = result.get("status", {}).get("state", "")
-        report.add("SyntheticData", "Seed index_recommendations",
-                    "PASS" if state == "SUCCEEDED" else "FAIL",
-                    message=f"{len(idx_records)} records",
-                    duration=time.time() - t0)
+        report.add(
+            "SyntheticData",
+            "Seed index_recommendations",
+            "PASS" if state == "SUCCEEDED" else "FAIL",
+            message=f"{len(idx_records)} records",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("SyntheticData", "Seed index_recommendations", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("SyntheticData", "Seed index_recommendations", "FAIL", message=str(e), duration=time.time() - t0)
 
     # 3c. Seed vacuum_history
     t0 = time.time()
@@ -568,13 +647,15 @@ def phase_synthetic_data(token: str, report: TestReport) -> bool:
             VALUES {values}"""
         result = sql_execute(insert_sql, token)
         state = result.get("status", {}).get("state", "")
-        report.add("SyntheticData", "Seed vacuum_history",
-                    "PASS" if state == "SUCCEEDED" else "FAIL",
-                    message=f"{len(vacuum_records)} records",
-                    duration=time.time() - t0)
+        report.add(
+            "SyntheticData",
+            "Seed vacuum_history",
+            "PASS" if state == "SUCCEEDED" else "FAIL",
+            message=f"{len(vacuum_records)} records",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("SyntheticData", "Seed vacuum_history", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("SyntheticData", "Seed vacuum_history", "FAIL", message=str(e), duration=time.time() - t0)
 
     # 3d. Seed lakebase_metrics
     t0 = time.time()
@@ -605,13 +686,15 @@ def phase_synthetic_data(token: str, report: TestReport) -> bool:
             VALUES {values}"""
         result = sql_execute(insert_sql, token)
         state = result.get("status", {}).get("state", "")
-        report.add("SyntheticData", "Seed lakebase_metrics",
-                    "PASS" if state == "SUCCEEDED" else "FAIL",
-                    message=f"{len(metric_records)} records",
-                    duration=time.time() - t0)
+        report.add(
+            "SyntheticData",
+            "Seed lakebase_metrics",
+            "PASS" if state == "SUCCEEDED" else "FAIL",
+            message=f"{len(metric_records)} records",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("SyntheticData", "Seed lakebase_metrics", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("SyntheticData", "Seed lakebase_metrics", "FAIL", message=str(e), duration=time.time() - t0)
 
     # 3e. Seed sync_validation_history
     t0 = time.time()
@@ -637,13 +720,15 @@ def phase_synthetic_data(token: str, report: TestReport) -> bool:
             VALUES {values}"""
         result = sql_execute(insert_sql, token)
         state = result.get("status", {}).get("state", "")
-        report.add("SyntheticData", "Seed sync_validation_history",
-                    "PASS" if state == "SUCCEEDED" else "FAIL",
-                    message=f"{len(sync_records)} records",
-                    duration=time.time() - t0)
+        report.add(
+            "SyntheticData",
+            "Seed sync_validation_history",
+            "PASS" if state == "SUCCEEDED" else "FAIL",
+            message=f"{len(sync_records)} records",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("SyntheticData", "Seed sync_validation_history", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("SyntheticData", "Seed sync_validation_history", "FAIL", message=str(e), duration=time.time() - t0)
 
     # 3f. Seed branch_lifecycle
     t0 = time.time()
@@ -672,13 +757,15 @@ def phase_synthetic_data(token: str, report: TestReport) -> bool:
             VALUES {values}"""
         result = sql_execute(insert_sql, token)
         state = result.get("status", {}).get("state", "")
-        report.add("SyntheticData", "Seed branch_lifecycle",
-                    "PASS" if state == "SUCCEEDED" else "FAIL",
-                    message=f"{len(branch_records)} records",
-                    duration=time.time() - t0)
+        report.add(
+            "SyntheticData",
+            "Seed branch_lifecycle",
+            "PASS" if state == "SUCCEEDED" else "FAIL",
+            message=f"{len(branch_records)} records",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("SyntheticData", "Seed branch_lifecycle", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("SyntheticData", "Seed branch_lifecycle", "FAIL", message=str(e), duration=time.time() - t0)
 
     # 3g. Seed data_archival_history
     t0 = time.time()
@@ -703,13 +790,15 @@ def phase_synthetic_data(token: str, report: TestReport) -> bool:
             VALUES {values}"""
         result = sql_execute(insert_sql, token)
         state = result.get("status", {}).get("state", "")
-        report.add("SyntheticData", "Seed data_archival_history",
-                    "PASS" if state == "SUCCEEDED" else "FAIL",
-                    message=f"{len(archival_records)} records",
-                    duration=time.time() - t0)
+        report.add(
+            "SyntheticData",
+            "Seed data_archival_history",
+            "PASS" if state == "SUCCEEDED" else "FAIL",
+            message=f"{len(archival_records)} records",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("SyntheticData", "Seed data_archival_history", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("SyntheticData", "Seed data_archival_history", "FAIL", message=str(e), duration=time.time() - t0)
 
     print("  Synthetic data generation complete.")
     return True
@@ -718,6 +807,7 @@ def phase_synthetic_data(token: str, report: TestReport) -> bool:
 # =============================================================================
 # Phase 4: Agent Testing — Run all agents with mock_mode=True but real Delta
 # =============================================================================
+
 
 async def phase_agent_testing(token: str, report: TestReport) -> bool:
     """Run all 3 agents and validate their tool outputs.
@@ -730,11 +820,11 @@ async def phase_agent_testing(token: str, report: TestReport) -> bool:
     print("  PHASE 4: AGENT TESTING (mock PG reads, real Delta writes)")
     print("=" * 70)
 
-    from framework.agent_framework import AgentFramework, EventType
-    from agents import ProvisioningAgent, PerformanceAgent, HealthAgent
-    from utils.lakebase_client import LakebaseClient
+    from agents import HealthAgent, PerformanceAgent, ProvisioningAgent
+    from framework.agent_framework import AgentFramework
+    from utils.alerting import AlertManager
     from utils.delta_writer import DeltaWriter
-    from utils.alerting import AlertManager, AlertChannel
+    from utils.lakebase_client import LakebaseClient
 
     # Initialize with mock PG reads but real SQL API Delta writes
     lakebase_client = LakebaseClient(
@@ -770,198 +860,195 @@ async def phase_agent_testing(token: str, report: TestReport) -> bool:
     # Tool 1: provision_lakebase_project
     t0 = time.time()
     try:
-        result = provisioning_agent.provision_lakebase_project(
-            LAKEBASE_PROJECT_NAME, "healthcare", "production"
+        result = provisioning_agent.provision_lakebase_project(LAKEBASE_PROJECT_NAME, "healthcare", "production")
+        report.add(
+            "ProvisioningAgent",
+            "provision_lakebase_project",
+            "PASS",
+            message=f"Branches: {len(result.get('branches_created', []))}",
+            duration=time.time() - t0,
         )
-        report.add("ProvisioningAgent", "provision_lakebase_project", "PASS",
-                    message=f"Branches: {len(result.get('branches_created', []))}",
-                    duration=time.time() - t0)
     except Exception as e:
-        report.add("ProvisioningAgent", "provision_lakebase_project", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "provision_lakebase_project", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 2: create_ops_catalog
     t0 = time.time()
     try:
         result = provisioning_agent.create_ops_catalog()
         status = result.get("status", "")
-        report.add("ProvisioningAgent", "create_ops_catalog",
-                    "PASS" if "succeeded" in status.lower() or "created" in status.lower() else "WARN",
-                    message=status, duration=time.time() - t0)
+        report.add(
+            "ProvisioningAgent",
+            "create_ops_catalog",
+            "PASS" if "succeeded" in status.lower() or "created" in status.lower() else "WARN",
+            message=status,
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("ProvisioningAgent", "create_ops_catalog", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "create_ops_catalog", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 3: create_branch
     t0 = time.time()
     try:
         result = provisioning_agent.create_branch(
-            LAKEBASE_PROJECT_NAME, "feat-test-deploy", "ephemeral",
-            "development", 14400
+            LAKEBASE_PROJECT_NAME, "feat-test-deploy", "ephemeral", "development", 14400
         )
-        report.add("ProvisioningAgent", "create_branch", "PASS",
-                    duration=time.time() - t0)
+        report.add("ProvisioningAgent", "create_branch", "PASS", duration=time.time() - t0)
     except Exception as e:
-        report.add("ProvisioningAgent", "create_branch", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "create_branch", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 4: protect_branch
     t0 = time.time()
     try:
         result = provisioning_agent.protect_branch(LAKEBASE_PROJECT_NAME, "staging")
-        report.add("ProvisioningAgent", "protect_branch", "PASS",
-                    duration=time.time() - t0)
+        report.add("ProvisioningAgent", "protect_branch", "PASS", duration=time.time() - t0)
     except Exception as e:
-        report.add("ProvisioningAgent", "protect_branch", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "protect_branch", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 5: enforce_ttl_policies
     t0 = time.time()
     try:
         result = provisioning_agent.enforce_ttl_policies(LAKEBASE_PROJECT_NAME)
-        report.add("ProvisioningAgent", "enforce_ttl_policies", "PASS",
-                    message=f"Kept: {result.get('total_active', 0)}",
-                    duration=time.time() - t0)
+        report.add(
+            "ProvisioningAgent",
+            "enforce_ttl_policies",
+            "PASS",
+            message=f"Kept: {result.get('total_active', 0)}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("ProvisioningAgent", "enforce_ttl_policies", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "enforce_ttl_policies", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 6: monitor_branch_count
     t0 = time.time()
     try:
         result = provisioning_agent.monitor_branch_count(LAKEBASE_PROJECT_NAME)
-        report.add("ProvisioningAgent", "monitor_branch_count", "PASS",
-                    message=f"Count: {result.get('branch_count', 0)}/{result.get('max_limit', 10)}",
-                    duration=time.time() - t0)
+        report.add(
+            "ProvisioningAgent",
+            "monitor_branch_count",
+            "PASS",
+            message=f"Count: {result.get('branch_count', 0)}/{result.get('max_limit', 10)}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("ProvisioningAgent", "monitor_branch_count", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "monitor_branch_count", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 7: reset_branch_from_parent
     t0 = time.time()
     try:
         result = provisioning_agent.reset_branch_from_parent(LAKEBASE_PROJECT_NAME)
-        report.add("ProvisioningAgent", "reset_branch_from_parent", "PASS",
-                    duration=time.time() - t0)
+        report.add("ProvisioningAgent", "reset_branch_from_parent", "PASS", duration=time.time() - t0)
     except Exception as e:
-        report.add("ProvisioningAgent", "reset_branch_from_parent", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "reset_branch_from_parent", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 8: apply_schema_migration
     t0 = time.time()
     try:
         result = provisioning_agent.apply_schema_migration(
-            LAKEBASE_PROJECT_NAME, "development",
-            ["CREATE TABLE IF NOT EXISTS test_orders (id SERIAL PRIMARY KEY);"]
+            LAKEBASE_PROJECT_NAME, "development", ["CREATE TABLE IF NOT EXISTS test_orders (id SERIAL PRIMARY KEY);"]
         )
-        report.add("ProvisioningAgent", "apply_schema_migration", "PASS",
-                    message=f"Applied: {result.get('total_applied', 0)}",
-                    duration=time.time() - t0)
+        report.add(
+            "ProvisioningAgent",
+            "apply_schema_migration",
+            "PASS",
+            message=f"Applied: {result.get('total_applied', 0)}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("ProvisioningAgent", "apply_schema_migration", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "apply_schema_migration", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 9: capture_schema_diff
     t0 = time.time()
     try:
-        result = provisioning_agent.capture_schema_diff(
-            LAKEBASE_PROJECT_NAME, "staging", "development"
+        result = provisioning_agent.capture_schema_diff(LAKEBASE_PROJECT_NAME, "staging", "development")
+        report.add(
+            "ProvisioningAgent",
+            "capture_schema_diff",
+            "PASS",
+            message=f"Changes: {result.get('has_changes', False)}",
+            duration=time.time() - t0,
         )
-        report.add("ProvisioningAgent", "capture_schema_diff", "PASS",
-                    message=f"Changes: {result.get('has_changes', False)}",
-                    duration=time.time() - t0)
     except Exception as e:
-        report.add("ProvisioningAgent", "capture_schema_diff", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "capture_schema_diff", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 10: test_migration_on_branch
     t0 = time.time()
     try:
         result = provisioning_agent.test_migration_on_branch(
-            LAKEBASE_PROJECT_NAME, 42,
-            ["CREATE TABLE IF NOT EXISTS audit_log (id SERIAL PRIMARY KEY);"]
+            LAKEBASE_PROJECT_NAME, 42, ["CREATE TABLE IF NOT EXISTS audit_log (id SERIAL PRIMARY KEY);"]
         )
-        report.add("ProvisioningAgent", "test_migration_on_branch", "PASS",
-                    message=f"Status: {result.get('overall_status', '')}",
-                    duration=time.time() - t0)
+        report.add(
+            "ProvisioningAgent",
+            "test_migration_on_branch",
+            "PASS",
+            message=f"Status: {result.get('overall_status', '')}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("ProvisioningAgent", "test_migration_on_branch", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "test_migration_on_branch", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 11: setup_cicd_pipeline
     t0 = time.time()
     try:
         result = provisioning_agent.setup_cicd_pipeline(LAKEBASE_PROJECT_NAME)
-        report.add("ProvisioningAgent", "setup_cicd_pipeline", "PASS",
-                    duration=time.time() - t0)
+        report.add("ProvisioningAgent", "setup_cicd_pipeline", "PASS", duration=time.time() - t0)
     except Exception as e:
-        report.add("ProvisioningAgent", "setup_cicd_pipeline", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "setup_cicd_pipeline", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 12: create_branch_on_pr
     t0 = time.time()
     try:
         result = provisioning_agent.create_branch_on_pr(LAKEBASE_PROJECT_NAME, 99)
-        report.add("ProvisioningAgent", "create_branch_on_pr", "PASS",
-                    duration=time.time() - t0)
+        report.add("ProvisioningAgent", "create_branch_on_pr", "PASS", duration=time.time() - t0)
     except Exception as e:
-        report.add("ProvisioningAgent", "create_branch_on_pr", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "create_branch_on_pr", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 13: delete_branch_on_pr_close
     t0 = time.time()
     try:
         result = provisioning_agent.delete_branch_on_pr_close(LAKEBASE_PROJECT_NAME, 99)
-        report.add("ProvisioningAgent", "delete_branch_on_pr_close", "PASS",
-                    duration=time.time() - t0)
+        report.add("ProvisioningAgent", "delete_branch_on_pr_close", "PASS", duration=time.time() - t0)
     except Exception as e:
-        report.add("ProvisioningAgent", "delete_branch_on_pr_close", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "delete_branch_on_pr_close", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 14: configure_rls
     t0 = time.time()
     try:
         result = provisioning_agent.configure_rls(LAKEBASE_PROJECT_NAME, "production")
-        report.add("ProvisioningAgent", "configure_rls", "PASS",
-                    message=f"Tenants: {result.get('rls_policies_created', 0)}",
-                    duration=time.time() - t0)
+        report.add(
+            "ProvisioningAgent",
+            "configure_rls",
+            "PASS",
+            message=f"Tenants: {result.get('rls_policies_created', 0)}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("ProvisioningAgent", "configure_rls", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "configure_rls", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 15: setup_unity_catalog_integration
     t0 = time.time()
     try:
-        result = provisioning_agent.setup_unity_catalog_integration(
-            LAKEBASE_PROJECT_NAME, OPS_CATALOG
-        )
-        report.add("ProvisioningAgent", "setup_unity_catalog_integration", "PASS",
-                    duration=time.time() - t0)
+        result = provisioning_agent.setup_unity_catalog_integration(LAKEBASE_PROJECT_NAME, OPS_CATALOG)
+        report.add("ProvisioningAgent", "setup_unity_catalog_integration", "PASS", duration=time.time() - t0)
     except Exception as e:
-        report.add("ProvisioningAgent", "setup_unity_catalog_integration", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add(
+            "ProvisioningAgent", "setup_unity_catalog_integration", "FAIL", message=str(e), duration=time.time() - t0
+        )
 
     # Tool 16: setup_ai_agent_branching
     t0 = time.time()
     try:
         result = provisioning_agent.setup_ai_agent_branching(LAKEBASE_PROJECT_NAME)
-        report.add("ProvisioningAgent", "setup_ai_agent_branching", "PASS",
-                    duration=time.time() - t0)
+        report.add("ProvisioningAgent", "setup_ai_agent_branching", "PASS", duration=time.time() - t0)
     except Exception as e:
-        report.add("ProvisioningAgent", "setup_ai_agent_branching", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "setup_ai_agent_branching", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 17: provision_with_governance
     t0 = time.time()
     try:
-        result = provisioning_agent.provision_with_governance(
-            LAKEBASE_PROJECT_NAME, "healthcare"
-        )
-        report.add("ProvisioningAgent", "provision_with_governance", "PASS",
-                    duration=time.time() - t0)
+        result = provisioning_agent.provision_with_governance(LAKEBASE_PROJECT_NAME, "healthcare")
+        report.add("ProvisioningAgent", "provision_with_governance", "PASS", duration=time.time() - t0)
     except Exception as e:
-        report.add("ProvisioningAgent", "provision_with_governance", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("ProvisioningAgent", "provision_with_governance", "FAIL", message=str(e), duration=time.time() - t0)
 
     # --- Test Performance Agent ---
     print("\n  --- Performance Agent (14 tools) ---")
@@ -992,18 +1079,24 @@ async def phase_agent_testing(token: str, report: TestReport) -> bool:
             msg = ""
             if isinstance(result, dict):
                 # Extract a useful summary
-                for key in ["unused_indexes_found", "bloated_indexes_found",
-                            "missing_index_candidates", "tables_needing_vacuum",
-                            "slow_queries_analyzed", "records", "risk_level",
-                            "tables_tuned", "status", "total_issues"]:
+                for key in [
+                    "unused_indexes_found",
+                    "bloated_indexes_found",
+                    "missing_index_candidates",
+                    "tables_needing_vacuum",
+                    "slow_queries_analyzed",
+                    "records",
+                    "risk_level",
+                    "tables_tuned",
+                    "status",
+                    "total_issues",
+                ]:
                     if key in result:
                         msg = f"{key}={result[key]}"
                         break
-            report.add("PerformanceAgent", tool_name, "PASS",
-                        message=msg, duration=time.time() - t0)
+            report.add("PerformanceAgent", tool_name, "PASS", message=msg, duration=time.time() - t0)
         except Exception as e:
-            report.add("PerformanceAgent", tool_name, "FAIL",
-                        message=str(e), duration=time.time() - t0)
+            report.add("PerformanceAgent", tool_name, "FAIL", message=str(e), duration=time.time() - t0)
 
     # --- Test Health Agent ---
     print("\n  --- Health Agent (17 tools) ---")
@@ -1013,43 +1106,67 @@ async def phase_agent_testing(token: str, report: TestReport) -> bool:
     try:
         health_metrics = health_agent.monitor_system_health(LAKEBASE_PROJECT_NAME, branch)
         metrics = health_metrics.get("metrics", {})
-        report.add("HealthAgent", "monitor_system_health", "PASS",
-                    message=f"Metrics: {len(metrics)}", duration=time.time() - t0)
+        report.add(
+            "HealthAgent",
+            "monitor_system_health",
+            "PASS",
+            message=f"Metrics: {len(metrics)}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("HealthAgent", "monitor_system_health", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("HealthAgent", "monitor_system_health", "FAIL", message=str(e), duration=time.time() - t0)
         metrics = {}
 
     # Tool 2: evaluate_alert_thresholds
     t0 = time.time()
     try:
         result = health_agent.evaluate_alert_thresholds(metrics, LAKEBASE_PROJECT_NAME, branch)
-        report.add("HealthAgent", "evaluate_alert_thresholds", "PASS",
-                    message=f"Alerts: {result.get('alerts_triggered', 0)}, SOPs: {result.get('sops_auto_executed', 0)}",
-                    duration=time.time() - t0)
+        report.add(
+            "HealthAgent",
+            "evaluate_alert_thresholds",
+            "PASS",
+            message=f"Alerts: {result.get('alerts_triggered', 0)}, SOPs: {result.get('sops_auto_executed', 0)}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("HealthAgent", "evaluate_alert_thresholds", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("HealthAgent", "evaluate_alert_thresholds", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 3: execute_low_risk_sop
     t0 = time.time()
     try:
         result = health_agent.execute_low_risk_sop(
-            "high_dead_tuples", LAKEBASE_PROJECT_NAME, branch,
-            {"table": "events"}
+            "high_dead_tuples", LAKEBASE_PROJECT_NAME, branch, {"table": "events"}
         )
-        report.add("HealthAgent", "execute_low_risk_sop", "PASS",
-                    message=f"Action: {result.get('action', '')}", duration=time.time() - t0)
+        report.add(
+            "HealthAgent",
+            "execute_low_risk_sop",
+            "PASS",
+            message=f"Action: {result.get('action', '')}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("HealthAgent", "execute_low_risk_sop", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("HealthAgent", "execute_low_risk_sop", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 4-6: Sync validation
     sync_tools = [
-        ("validate_sync_completeness", {"project_id": LAKEBASE_PROJECT_NAME, "branch_id": branch,
-         "source_table": "orders", "target_delta_table": "ops_catalog.lakebase_ops.orders_delta"}),
-        ("validate_sync_integrity", {"project_id": LAKEBASE_PROJECT_NAME, "branch_id": branch,
-         "source_table": "orders", "target_delta_table": "ops_catalog.lakebase_ops.orders_delta"}),
+        (
+            "validate_sync_completeness",
+            {
+                "project_id": LAKEBASE_PROJECT_NAME,
+                "branch_id": branch,
+                "source_table": "orders",
+                "target_delta_table": "ops_catalog.lakebase_ops.orders_delta",
+            },
+        ),
+        (
+            "validate_sync_integrity",
+            {
+                "project_id": LAKEBASE_PROJECT_NAME,
+                "branch_id": branch,
+                "source_table": "orders",
+                "target_delta_table": "ops_catalog.lakebase_ops.orders_delta",
+            },
+        ),
         ("run_full_sync_validation", {"project_id": LAKEBASE_PROJECT_NAME, "branch_id": branch}),
     ]
     for tool_name, kwargs in sync_tools:
@@ -1059,125 +1176,147 @@ async def phase_agent_testing(token: str, report: TestReport) -> bool:
             result = handler(**kwargs)
             report.add("HealthAgent", tool_name, "PASS", duration=time.time() - t0)
         except Exception as e:
-            report.add("HealthAgent", tool_name, "FAIL",
-                        message=str(e), duration=time.time() - t0)
+            report.add("HealthAgent", tool_name, "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 7-9: Cold data archival
     t0 = time.time()
     try:
         result = health_agent.identify_cold_data(LAKEBASE_PROJECT_NAME, branch)
-        report.add("HealthAgent", "identify_cold_data", "PASS",
-                    message=f"Candidates: {result.get('cold_candidates', 0)}",
-                    duration=time.time() - t0)
+        report.add(
+            "HealthAgent",
+            "identify_cold_data",
+            "PASS",
+            message=f"Candidates: {result.get('cold_candidates', 0)}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("HealthAgent", "identify_cold_data", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("HealthAgent", "identify_cold_data", "FAIL", message=str(e), duration=time.time() - t0)
 
     t0 = time.time()
     try:
         result = health_agent.archive_cold_data_to_delta(LAKEBASE_PROJECT_NAME, branch, "orders")
-        report.add("HealthAgent", "archive_cold_data_to_delta", "PASS",
-                    message=f"Rows: {result.get('rows_archived', 0)}",
-                    duration=time.time() - t0)
+        report.add(
+            "HealthAgent",
+            "archive_cold_data_to_delta",
+            "PASS",
+            message=f"Rows: {result.get('rows_archived', 0)}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("HealthAgent", "archive_cold_data_to_delta", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("HealthAgent", "archive_cold_data_to_delta", "FAIL", message=str(e), duration=time.time() - t0)
 
     t0 = time.time()
     try:
         result = health_agent.create_unified_access_view(
             LAKEBASE_PROJECT_NAME, branch, "orders", "ops_catalog.lakebase_archive.orders_cold"
         )
-        report.add("HealthAgent", "create_unified_access_view", "PASS",
-                    duration=time.time() - t0)
+        report.add("HealthAgent", "create_unified_access_view", "PASS", duration=time.time() - t0)
     except Exception as e:
-        report.add("HealthAgent", "create_unified_access_view", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("HealthAgent", "create_unified_access_view", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 10-11: Connection monitoring
     t0 = time.time()
     try:
         result = health_agent.monitor_connections(LAKEBASE_PROJECT_NAME, branch)
-        report.add("HealthAgent", "monitor_connections", "PASS",
-                    message=f"Total: {result.get('total_connections', 0)}",
-                    duration=time.time() - t0)
+        report.add(
+            "HealthAgent",
+            "monitor_connections",
+            "PASS",
+            message=f"Total: {result.get('total_connections', 0)}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("HealthAgent", "monitor_connections", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("HealthAgent", "monitor_connections", "FAIL", message=str(e), duration=time.time() - t0)
 
     t0 = time.time()
     try:
         result = health_agent.terminate_idle_connections(LAKEBASE_PROJECT_NAME, branch)
-        report.add("HealthAgent", "terminate_idle_connections", "PASS",
-                    message=f"Terminated: {result.get('sessions_terminated', 0)}",
-                    duration=time.time() - t0)
+        report.add(
+            "HealthAgent",
+            "terminate_idle_connections",
+            "PASS",
+            message=f"Terminated: {result.get('sessions_terminated', 0)}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("HealthAgent", "terminate_idle_connections", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("HealthAgent", "terminate_idle_connections", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 12-13: Cost attribution
     t0 = time.time()
     try:
         result = health_agent.track_cost_attribution(LAKEBASE_PROJECT_NAME)
-        report.add("HealthAgent", "track_cost_attribution", "PASS",
-                    message=f"Total DBUs: {result.get('total_dbus', 0)}",
-                    duration=time.time() - t0)
+        report.add(
+            "HealthAgent",
+            "track_cost_attribution",
+            "PASS",
+            message=f"Total DBUs: {result.get('total_dbus', 0)}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("HealthAgent", "track_cost_attribution", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("HealthAgent", "track_cost_attribution", "FAIL", message=str(e), duration=time.time() - t0)
 
     t0 = time.time()
     try:
         result = health_agent.recommend_scale_to_zero_timeout(LAKEBASE_PROJECT_NAME, branch)
-        report.add("HealthAgent", "recommend_scale_to_zero_timeout", "PASS",
-                    message=f"Recommended: {result.get('recommended_timeout', '')}",
-                    duration=time.time() - t0)
+        report.add(
+            "HealthAgent",
+            "recommend_scale_to_zero_timeout",
+            "PASS",
+            message=f"Recommended: {result.get('recommended_timeout', '')}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("HealthAgent", "recommend_scale_to_zero_timeout", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("HealthAgent", "recommend_scale_to_zero_timeout", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 14-15: Self-healing
     t0 = time.time()
     try:
-        result = health_agent.diagnose_root_cause({
-            "metric": "dead_tuple_ratio", "value": 0.35
-        })
-        report.add("HealthAgent", "diagnose_root_cause", "PASS",
-                    message=f"Auto-fixable: {result.get('auto_fixable', False)}",
-                    duration=time.time() - t0)
+        result = health_agent.diagnose_root_cause({"metric": "dead_tuple_ratio", "value": 0.35})
+        report.add(
+            "HealthAgent",
+            "diagnose_root_cause",
+            "PASS",
+            message=f"Auto-fixable: {result.get('auto_fixable', False)}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("HealthAgent", "diagnose_root_cause", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("HealthAgent", "diagnose_root_cause", "FAIL", message=str(e), duration=time.time() - t0)
 
     t0 = time.time()
     try:
-        result = health_agent.self_heal("issue-001", {
-            "action": "vacuum analyze events",
-            "risk_level": "low",
-            "project_id": LAKEBASE_PROJECT_NAME,
-            "branch_id": branch,
-            "table": "events",
-        })
-        report.add("HealthAgent", "self_heal", "PASS",
-                    message=f"Status: {result.get('status', '')}",
-                    duration=time.time() - t0)
+        result = health_agent.self_heal(
+            "issue-001",
+            {
+                "action": "vacuum analyze events",
+                "risk_level": "low",
+                "project_id": LAKEBASE_PROJECT_NAME,
+                "branch_id": branch,
+                "table": "events",
+            },
+        )
+        report.add(
+            "HealthAgent", "self_heal", "PASS", message=f"Status: {result.get('status', '')}", duration=time.time() - t0
+        )
     except Exception as e:
-        report.add("HealthAgent", "self_heal", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("HealthAgent", "self_heal", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Tool 16: Natural language DBA
     t0 = time.time()
     try:
         result = health_agent.natural_language_dba(
             "Why is my orders query slow?",
-            LAKEBASE_PROJECT_NAME, branch,
+            LAKEBASE_PROJECT_NAME,
+            branch,
         )
-        report.add("HealthAgent", "natural_language_dba", "PASS",
-                    message=f"Confidence: {result.get('confidence', '')}",
-                    duration=time.time() - t0)
+        report.add(
+            "HealthAgent",
+            "natural_language_dba",
+            "PASS",
+            message=f"Confidence: {result.get('confidence', '')}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("HealthAgent", "natural_language_dba", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("HealthAgent", "natural_language_dba", "FAIL", message=str(e), duration=time.time() - t0)
 
     # --- V2: PG17 Extensions & Modular Architecture Tests ---
     print("\n  --- V2: PG17 Extensions & Modular Architecture ---")
@@ -1185,17 +1324,17 @@ async def phase_agent_testing(token: str, report: TestReport) -> bool:
     # V2-01: pg_stat_statements_info collection
     t0 = time.time()
     try:
-        result = performance_agent.collect_pg_stat_statements_info(
-            LAKEBASE_PROJECT_NAME, branch
-        )
-        has_dealloc = "dealloc" in result
+        result = performance_agent.collect_pg_stat_statements_info(LAKEBASE_PROJECT_NAME, branch)
         has_reset = "stats_reset" in result
-        report.add("V2_PG17", "collect_pg_stat_statements_info", "PASS",
-                    message=f"dealloc={result.get('dealloc')}, has_reset={has_reset}",
-                    duration=time.time() - t0)
+        report.add(
+            "V2_PG17",
+            "collect_pg_stat_statements_info",
+            "PASS",
+            message=f"dealloc={result.get('dealloc')}, has_reset={has_reset}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("V2_PG17", "collect_pg_stat_statements_info", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("V2_PG17", "collect_pg_stat_statements_info", "FAIL", message=str(e), duration=time.time() - t0)
 
     # V2-02: pg_stat_io metrics in health monitoring
     t0 = time.time()
@@ -1206,16 +1345,23 @@ async def phase_agent_testing(token: str, report: TestReport) -> bool:
         has_io_read = "io_read_time_ms" in io_metrics
         has_io_write = "io_write_time_ms" in io_metrics
         if has_io_hit and has_io_read and has_io_write:
-            report.add("V2_PG17", "pg_stat_io in health monitoring", "PASS",
-                        message=f"io_hit_ratio={io_metrics['io_hit_ratio']:.4f}",
-                        duration=time.time() - t0)
+            report.add(
+                "V2_PG17",
+                "pg_stat_io in health monitoring",
+                "PASS",
+                message=f"io_hit_ratio={io_metrics['io_hit_ratio']:.4f}",
+                duration=time.time() - t0,
+            )
         else:
-            report.add("V2_PG17", "pg_stat_io in health monitoring", "FAIL",
-                        message=f"Missing: io_hit={has_io_hit}, io_read={has_io_read}, io_write={has_io_write}",
-                        duration=time.time() - t0)
+            report.add(
+                "V2_PG17",
+                "pg_stat_io in health monitoring",
+                "FAIL",
+                message=f"Missing: io_hit={has_io_hit}, io_read={has_io_read}, io_write={has_io_write}",
+                duration=time.time() - t0,
+            )
     except Exception as e:
-        report.add("V2_PG17", "pg_stat_io in health monitoring", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("V2_PG17", "pg_stat_io in health monitoring", "FAIL", message=str(e), duration=time.time() - t0)
 
     # V2-03: pg_stat_wal metrics in health monitoring
     t0 = time.time()
@@ -1225,226 +1371,285 @@ async def phase_agent_testing(token: str, report: TestReport) -> bool:
         has_wal_buffers = "wal_buffers_full" in wal_metrics
         has_wal_write = "wal_write_time_ms" in wal_metrics
         if has_wal_bytes and has_wal_buffers and has_wal_write:
-            report.add("V2_PG17", "pg_stat_wal in health monitoring", "PASS",
-                        message=f"wal_bytes={wal_metrics['wal_bytes_generated']}",
-                        duration=time.time() - t0)
+            report.add(
+                "V2_PG17",
+                "pg_stat_wal in health monitoring",
+                "PASS",
+                message=f"wal_bytes={wal_metrics['wal_bytes_generated']}",
+                duration=time.time() - t0,
+            )
         else:
-            report.add("V2_PG17", "pg_stat_wal in health monitoring", "FAIL",
-                        message=f"Missing: bytes={has_wal_bytes}, buffers={has_wal_buffers}, write={has_wal_write}",
-                        duration=time.time() - t0)
+            report.add(
+                "V2_PG17",
+                "pg_stat_wal in health monitoring",
+                "FAIL",
+                message=f"Missing: bytes={has_wal_bytes}, buffers={has_wal_buffers}, write={has_wal_write}",
+                duration=time.time() - t0,
+            )
     except Exception as e:
-        report.add("V2_PG17", "pg_stat_wal in health monitoring", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("V2_PG17", "pg_stat_wal in health monitoring", "FAIL", message=str(e), duration=time.time() - t0)
 
     # V2-04: PG17 columns in pg_stat_statements persistence
     t0 = time.time()
     try:
-        persist_result = performance_agent.persist_pg_stat_statements(
-            LAKEBASE_PROJECT_NAME, branch
-        )
+        persist_result = performance_agent.persist_pg_stat_statements(LAKEBASE_PROJECT_NAME, branch)
         record_count = persist_result.get("records", 0)
         # Verify PG17 columns by checking the write log (records are int count, not list)
         write_log = delta_writer.get_write_log()
-        pg_stat_writes = [w for w in write_log if "pg_stat_history" in w.get("table", "")]
+        [w for w in write_log if "pg_stat_history" in w.get("table", "")]
         # Also verify via mock client that the query includes PG17 columns
-        mock_rows = lakebase_client.execute_query(LAKEBASE_PROJECT_NAME, branch,
-                                                    "SELECT * FROM pg_stat_statements")
+        mock_rows = lakebase_client.execute_query(LAKEBASE_PROJECT_NAME, branch, "SELECT * FROM pg_stat_statements")
         if mock_rows:
             first = mock_rows[0]
-            pg17_cols = ["temp_blks_read", "wal_records", "wal_fpi", "wal_bytes",
-                         "jit_functions", "jit_generation_time"]
+            pg17_cols = [
+                "temp_blks_read",
+                "wal_records",
+                "wal_fpi",
+                "wal_bytes",
+                "jit_functions",
+                "jit_generation_time",
+            ]
             found = [c for c in pg17_cols if c in first]
             if len(found) == len(pg17_cols):
-                report.add("V2_PG17", "PG17 columns in persist_pg_stat", "PASS",
-                            message=f"All {len(pg17_cols)} PG17 cols, {record_count} records persisted",
-                            duration=time.time() - t0)
+                report.add(
+                    "V2_PG17",
+                    "PG17 columns in persist_pg_stat",
+                    "PASS",
+                    message=f"All {len(pg17_cols)} PG17 cols, {record_count} records persisted",
+                    duration=time.time() - t0,
+                )
             else:
                 missing = set(pg17_cols) - set(found)
-                report.add("V2_PG17", "PG17 columns in persist_pg_stat", "FAIL",
-                            message=f"Missing from mock: {missing}",
-                            duration=time.time() - t0)
+                report.add(
+                    "V2_PG17",
+                    "PG17 columns in persist_pg_stat",
+                    "FAIL",
+                    message=f"Missing from mock: {missing}",
+                    duration=time.time() - t0,
+                )
         else:
-            report.add("V2_PG17", "PG17 columns in persist_pg_stat", "FAIL",
-                        message="No mock rows returned", duration=time.time() - t0)
+            report.add(
+                "V2_PG17",
+                "PG17 columns in persist_pg_stat",
+                "FAIL",
+                message="No mock rows returned",
+                duration=time.time() - t0,
+            )
     except Exception as e:
-        report.add("V2_PG17", "PG17 columns in persist_pg_stat", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("V2_PG17", "PG17 columns in persist_pg_stat", "FAIL", message=str(e), duration=time.time() - t0)
 
     # V2-05: Duplicate index detection returns real results
     t0 = time.time()
     try:
-        dup_result = performance_agent.detect_duplicate_indexes(
-            LAKEBASE_PROJECT_NAME, branch
-        )
+        dup_result = performance_agent.detect_duplicate_indexes(LAKEBASE_PROJECT_NAME, branch)
         dup_count = dup_result.get("duplicate_indexes_found", 0)
-        report.add("V2_PG17", "detect_duplicate_indexes (real query)", "PASS",
-                    message=f"Found {dup_count} duplicate pair(s)",
-                    duration=time.time() - t0)
+        report.add(
+            "V2_PG17",
+            "detect_duplicate_indexes (real query)",
+            "PASS",
+            message=f"Found {dup_count} duplicate pair(s)",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("V2_PG17", "detect_duplicate_indexes (real query)", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add(
+            "V2_PG17", "detect_duplicate_indexes (real query)", "FAIL", message=str(e), duration=time.time() - t0
+        )
 
     # V2-06: Missing FK index detection returns real results
     t0 = time.time()
     try:
-        fk_result = performance_agent.detect_missing_fk_indexes(
-            LAKEBASE_PROJECT_NAME, branch
-        )
+        fk_result = performance_agent.detect_missing_fk_indexes(LAKEBASE_PROJECT_NAME, branch)
         fk_count = fk_result.get("missing_fk_indexes_found", 0)
-        report.add("V2_PG17", "detect_missing_fk_indexes (real query)", "PASS",
-                    message=f"Found {fk_count} unindexed FK(s)",
-                    duration=time.time() - t0)
+        report.add(
+            "V2_PG17",
+            "detect_missing_fk_indexes (real query)",
+            "PASS",
+            message=f"Found {fk_count} unindexed FK(s)",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("V2_PG17", "detect_missing_fk_indexes (real query)", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add(
+            "V2_PG17", "detect_missing_fk_indexes (real query)", "FAIL", message=str(e), duration=time.time() - t0
+        )
 
     # V2-07: Schema diff uses native PG catalogs (not information_schema)
     t0 = time.time()
     try:
-        diff_result = provisioning_agent.capture_schema_diff(
-            LAKEBASE_PROJECT_NAME, "staging", "development"
-        )
+        diff_result = provisioning_agent.capture_schema_diff(LAKEBASE_PROJECT_NAME, "staging", "development")
         # Verify it returns ordinal_position (only from native catalogs)
         source_schema = diff_result.get("source_schema", {})
-        has_ordinal = any(
-            "ordinal_position" in str(cols)
-            for cols in source_schema.values()
+        any(
+            "ordinal_position" in str(cols) for cols in source_schema.values()
         ) if source_schema else True  # Mock may not expose it, but query uses it
-        report.add("V2_PG17", "schema_diff uses native pg_catalogs", "PASS",
-                    message=f"Changes: {diff_result.get('has_changes', False)}",
-                    duration=time.time() - t0)
+        report.add(
+            "V2_PG17",
+            "schema_diff uses native pg_catalogs",
+            "PASS",
+            message=f"Changes: {diff_result.get('has_changes', False)}",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("V2_PG17", "schema_diff uses native pg_catalogs", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("V2_PG17", "schema_diff uses native pg_catalogs", "FAIL", message=str(e), duration=time.time() - t0)
 
     # V2-08: Modular imports work from sub-packages
     t0 = time.time()
     try:
-        from agents.provisioning import ProvisioningAgent as PA
-        from agents.performance import PerformanceAgent as PerfA
+        from agents import HealthAgent as HA2
+        from agents import PerformanceAgent as PerfA2
+        from agents import ProvisioningAgent as PA2
         from agents.health import HealthAgent as HA
-        from agents import ProvisioningAgent as PA2, PerformanceAgent as PerfA2, HealthAgent as HA2
+        from agents.performance import PerformanceAgent as PerfA
+        from agents.provisioning import ProvisioningAgent as PA
+
         assert PA is PA2, "Sub-package import mismatch for ProvisioningAgent"
         assert PerfA is PerfA2, "Sub-package import mismatch for PerformanceAgent"
         assert HA is HA2, "Sub-package import mismatch for HealthAgent"
-        report.add("V2_Modular", "Sub-package imports consistent", "PASS",
-                    duration=time.time() - t0)
+        report.add("V2_Modular", "Sub-package imports consistent", "PASS", duration=time.time() - t0)
     except Exception as e:
-        report.add("V2_Modular", "Sub-package imports consistent", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("V2_Modular", "Sub-package imports consistent", "FAIL", message=str(e), duration=time.time() - t0)
 
     # V2-09: SQL queries module has all expected constants
     t0 = time.time()
     try:
         from sql import queries as q
+
         expected_constants = [
-            "PG_STAT_STATEMENTS_FULL", "PG_STAT_STATEMENTS_INFO", "PG_STAT_STATEMENTS_SLOW",
-            "UNUSED_INDEXES", "BLOATED_INDEXES", "MISSING_INDEXES",
-            "DUPLICATE_INDEXES", "MISSING_FK_INDEXES",
-            "TABLES_NEEDING_VACUUM", "TXID_WRAPAROUND_RISK", "AUTOVACUUM_CANDIDATES",
-            "DATABASE_STATS", "CONNECTION_STATES", "TABLE_DEAD_TUPLES",
-            "WAITING_LOCKS", "MAX_TXID_AGE", "IO_STATS", "WAL_STATS",
-            "CONNECTION_DETAILS", "IDLE_CONNECTIONS", "SCHEMA_COLUMNS",
+            "PG_STAT_STATEMENTS_FULL",
+            "PG_STAT_STATEMENTS_INFO",
+            "PG_STAT_STATEMENTS_SLOW",
+            "UNUSED_INDEXES",
+            "BLOATED_INDEXES",
+            "MISSING_INDEXES",
+            "DUPLICATE_INDEXES",
+            "MISSING_FK_INDEXES",
+            "TABLES_NEEDING_VACUUM",
+            "TXID_WRAPAROUND_RISK",
+            "AUTOVACUUM_CANDIDATES",
+            "DATABASE_STATS",
+            "CONNECTION_STATES",
+            "TABLE_DEAD_TUPLES",
+            "WAITING_LOCKS",
+            "MAX_TXID_AGE",
+            "IO_STATS",
+            "WAL_STATS",
+            "CONNECTION_DETAILS",
+            "IDLE_CONNECTIONS",
+            "SCHEMA_COLUMNS",
         ]
         found = [c for c in expected_constants if hasattr(q, c)]
         missing = [c for c in expected_constants if not hasattr(q, c)]
         if not missing:
-            report.add("V2_Modular", "sql/queries.py has all 21 constants", "PASS",
-                        message=f"{len(found)}/{len(expected_constants)} found",
-                        duration=time.time() - t0)
+            report.add(
+                "V2_Modular",
+                "sql/queries.py has all 21 constants",
+                "PASS",
+                message=f"{len(found)}/{len(expected_constants)} found",
+                duration=time.time() - t0,
+            )
         else:
-            report.add("V2_Modular", "sql/queries.py has all 21 constants", "FAIL",
-                        message=f"Missing: {missing}",
-                        duration=time.time() - t0)
+            report.add(
+                "V2_Modular",
+                "sql/queries.py has all 21 constants",
+                "FAIL",
+                message=f"Missing: {missing}",
+                duration=time.time() - t0,
+            )
     except Exception as e:
-        report.add("V2_Modular", "sql/queries.py has all 21 constants", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add(
+            "V2_Modular", "sql/queries.py has all 21 constants", "FAIL", message=str(e), duration=time.time() - t0
+        )
 
     # V2-10: Agent mixin composition is correct
     t0 = time.time()
     try:
-        from agents.performance.metrics import MetricsMixin
-        from agents.performance.indexes import IndexMixin
-        from agents.performance.maintenance import MaintenanceMixin
-        from agents.performance.optimization import OptimizationMixin
-        from agents.health.monitoring import MonitoringMixin
-        from agents.health.sync import SyncMixin
-        from agents.health.archival import ArchivalMixin
-        from agents.health.connections import ConnectionMixin
-        from agents.health.operations import OperationsMixin
-        from agents.provisioning.project import ProjectMixin
-        from agents.provisioning.branching import BranchingMixin
-        from agents.provisioning.migration import MigrationMixin
-        from agents.provisioning.cicd import CICDMixin
-        from agents.provisioning.governance import GovernanceMixin
-
         # Verify MRO includes all mixins
         perf_mro = [cls.__name__ for cls in type(performance_agent).__mro__]
         health_mro = [cls.__name__ for cls in type(health_agent).__mro__]
         prov_mro = [cls.__name__ for cls in type(provisioning_agent).__mro__]
 
         perf_ok = all(m in perf_mro for m in ["MetricsMixin", "IndexMixin", "MaintenanceMixin", "OptimizationMixin"])
-        health_ok = all(m in health_mro for m in ["MonitoringMixin", "SyncMixin", "ArchivalMixin", "ConnectionMixin", "OperationsMixin"])
-        prov_ok = all(m in prov_mro for m in ["ProjectMixin", "BranchingMixin", "MigrationMixin", "CICDMixin", "GovernanceMixin"])
+        health_ok = all(
+            m in health_mro
+            for m in ["MonitoringMixin", "SyncMixin", "ArchivalMixin", "ConnectionMixin", "OperationsMixin"]
+        )
+        prov_ok = all(
+            m in prov_mro for m in ["ProjectMixin", "BranchingMixin", "MigrationMixin", "CICDMixin", "GovernanceMixin"]
+        )
 
         if perf_ok and health_ok and prov_ok:
-            report.add("V2_Modular", "Agent mixin MRO composition", "PASS",
-                        message="All 14 mixins in correct MRO",
-                        duration=time.time() - t0)
+            report.add(
+                "V2_Modular",
+                "Agent mixin MRO composition",
+                "PASS",
+                message="All 14 mixins in correct MRO",
+                duration=time.time() - t0,
+            )
         else:
-            report.add("V2_Modular", "Agent mixin MRO composition", "FAIL",
-                        message=f"perf={perf_ok}, health={health_ok}, prov={prov_ok}",
-                        duration=time.time() - t0)
+            report.add(
+                "V2_Modular",
+                "Agent mixin MRO composition",
+                "FAIL",
+                message=f"perf={perf_ok}, health={health_ok}, prov={prov_ok}",
+                duration=time.time() - t0,
+            )
     except Exception as e:
-        report.add("V2_Modular", "Agent mixin MRO composition", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("V2_Modular", "Agent mixin MRO composition", "FAIL", message=str(e), duration=time.time() - t0)
 
     # V2-11: No compute_status in any agent code
     t0 = time.time()
     try:
-        import agents.performance.metrics as pm
-        import agents.health.monitoring as hm
         import inspect
+
+        import agents.health.monitoring as hm
+        import agents.performance.metrics as pm
+
         perf_src = inspect.getsource(pm)
         health_src = inspect.getsource(hm)
         has_compute_status = "compute_status" in perf_src or "compute_status" in health_src
-        report.add("V2_PG17", "No compute_status in agent code",
-                    "PASS" if not has_compute_status else "FAIL",
-                    message="Removed" if not has_compute_status else "Still present!",
-                    duration=time.time() - t0)
+        report.add(
+            "V2_PG17",
+            "No compute_status in agent code",
+            "PASS" if not has_compute_status else "FAIL",
+            message="Removed" if not has_compute_status else "Still present!",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("V2_PG17", "No compute_status in agent code", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("V2_PG17", "No compute_status in agent code", "FAIL", message=str(e), duration=time.time() - t0)
 
     # V2-12: No information_schema in any agent code
     t0 = time.time()
     try:
         import agents.provisioning.migration as mig
+
         mig_src = inspect.getsource(mig)
         has_info_schema = "information_schema" in mig_src
-        report.add("V2_PG17", "No information_schema in agents",
-                    "PASS" if not has_info_schema else "FAIL",
-                    message="Uses pg_catalog" if not has_info_schema else "Still uses information_schema!",
-                    duration=time.time() - t0)
+        report.add(
+            "V2_PG17",
+            "No information_schema in agents",
+            "PASS" if not has_info_schema else "FAIL",
+            message="Uses pg_catalog" if not has_info_schema else "Still uses information_schema!",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("V2_PG17", "No information_schema in agents", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("V2_PG17", "No information_schema in agents", "FAIL", message=str(e), duration=time.time() - t0)
 
     # V2-13: No scale-to-zero exception handling
     t0 = time.time()
     try:
         perf_metrics_src = inspect.getsource(pm)
-        has_scale_to_zero = "scale-to-zero" in perf_metrics_src.lower() or "scale_to_zero" in perf_metrics_src.lower()
+        "scale-to-zero" in perf_metrics_src.lower() or "scale_to_zero" in perf_metrics_src.lower()
         # Note: scale_to_zero as a method name (recommend_scale_to_zero_timeout) is OK
         # We're checking for the error handling pattern
         has_bad_pattern = "scale-to-zero" in perf_metrics_src.lower()
-        report.add("V2_PG17", "No scale-to-zero exception handling",
-                    "PASS" if not has_bad_pattern else "FAIL",
-                    message="Clean" if not has_bad_pattern else "Still has scale-to-zero handling",
-                    duration=time.time() - t0)
+        report.add(
+            "V2_PG17",
+            "No scale-to-zero exception handling",
+            "PASS" if not has_bad_pattern else "FAIL",
+            message="Clean" if not has_bad_pattern else "Still has scale-to-zero handling",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("V2_PG17", "No scale-to-zero exception handling", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("V2_PG17", "No scale-to-zero exception handling", "FAIL", message=str(e), duration=time.time() - t0)
 
     # --- Run full framework cycle ---
     print("\n  --- Full Framework Orchestration Cycle ---")
@@ -1463,20 +1668,17 @@ async def phase_agent_testing(token: str, report: TestReport) -> bool:
             ],
         }
         cycle_results = await framework.run_full_cycle(context)
-        total_tasks = sum(
-            s.get("total_tasks", 0)
-            for s in cycle_results.get("agent_summaries", {}).values()
+        total_tasks = sum(s.get("total_tasks", 0) for s in cycle_results.get("agent_summaries", {}).values())
+        total_success = sum(s.get("successful", 0) for s in cycle_results.get("agent_summaries", {}).values())
+        report.add(
+            "Framework",
+            "run_full_cycle",
+            "PASS",
+            message=f"Tasks: {total_success}/{total_tasks}, Events: {cycle_results.get('events', 0)}",
+            duration=time.time() - t0,
         )
-        total_success = sum(
-            s.get("successful", 0)
-            for s in cycle_results.get("agent_summaries", {}).values()
-        )
-        report.add("Framework", "run_full_cycle", "PASS",
-                    message=f"Tasks: {total_success}/{total_tasks}, Events: {cycle_results.get('events', 0)}",
-                    duration=time.time() - t0)
     except Exception as e:
-        report.add("Framework", "run_full_cycle", "FAIL",
-                    message=str(e), duration=time.time() - t0)
+        report.add("Framework", "run_full_cycle", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Cleanup
     lakebase_client.close_all()
@@ -1487,6 +1689,7 @@ async def phase_agent_testing(token: str, report: TestReport) -> bool:
 # =============================================================================
 # Phase 5: Validation — Verify Delta tables are populated
 # =============================================================================
+
 
 def phase_validation(token: str, report: TestReport) -> bool:
     """Verify all 7 Delta tables have data."""
@@ -1512,16 +1715,24 @@ def phase_validation(token: str, report: TestReport) -> bool:
             rows = sql_query_rows(f"SELECT COUNT(*) as cnt FROM {full_name}", token)
             count = int(rows[0]["cnt"]) if rows else 0
             if count >= min_rows:
-                report.add("Validation", f"Table {table_name} has data",
-                            "PASS", message=f"{count} rows", duration=time.time() - t0)
+                report.add(
+                    "Validation",
+                    f"Table {table_name} has data",
+                    "PASS",
+                    message=f"{count} rows",
+                    duration=time.time() - t0,
+                )
             else:
-                report.add("Validation", f"Table {table_name} has data",
-                            "FAIL", message=f"Only {count} rows (need >= {min_rows})",
-                            duration=time.time() - t0)
+                report.add(
+                    "Validation",
+                    f"Table {table_name} has data",
+                    "FAIL",
+                    message=f"Only {count} rows (need >= {min_rows})",
+                    duration=time.time() - t0,
+                )
                 all_passed = False
         except Exception as e:
-            report.add("Validation", f"Table {table_name} has data",
-                        "FAIL", message=str(e), duration=time.time() - t0)
+            report.add("Validation", f"Table {table_name} has data", "FAIL", message=str(e), duration=time.time() - t0)
             all_passed = False
 
     # Validate Performance Agent findings
@@ -1530,32 +1741,40 @@ def phase_validation(token: str, report: TestReport) -> bool:
         recs = sql_query_rows(
             f"SELECT recommendation_type, COUNT(*) as cnt "
             f"FROM {OPS_CATALOG}.{OPS_SCHEMA}.index_recommendations "
-            f"GROUP BY recommendation_type", token
+            f"GROUP BY recommendation_type",
+            token,
         )
         types_found = {r["recommendation_type"]: int(r["cnt"]) for r in recs}
         has_findings = len(types_found) > 0
-        report.add("Validation", "Performance Agent: index recommendations",
-                    "PASS" if has_findings else "WARN",
-                    message=str(types_found), duration=time.time() - t0)
+        report.add(
+            "Validation",
+            "Performance Agent: index recommendations",
+            "PASS" if has_findings else "WARN",
+            message=str(types_found),
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("Validation", "Performance Agent: index recommendations",
-                    "FAIL", message=str(e), duration=time.time() - t0)
+        report.add(
+            "Validation", "Performance Agent: index recommendations", "FAIL", message=str(e), duration=time.time() - t0
+        )
 
     # Validate branch lifecycle events
     t0 = time.time()
     try:
         events = sql_query_rows(
-            f"SELECT event_type, COUNT(*) as cnt "
-            f"FROM {OPS_CATALOG}.{OPS_SCHEMA}.branch_lifecycle "
-            f"GROUP BY event_type", token
+            f"SELECT event_type, COUNT(*) as cnt FROM {OPS_CATALOG}.{OPS_SCHEMA}.branch_lifecycle GROUP BY event_type",
+            token,
         )
         event_types = {e["event_type"]: int(e["cnt"]) for e in events}
-        report.add("Validation", "Branch lifecycle events recorded",
-                    "PASS" if len(event_types) > 0 else "WARN",
-                    message=str(event_types), duration=time.time() - t0)
+        report.add(
+            "Validation",
+            "Branch lifecycle events recorded",
+            "PASS" if len(event_types) > 0 else "WARN",
+            message=str(event_types),
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("Validation", "Branch lifecycle events recorded",
-                    "FAIL", message=str(e), duration=time.time() - t0)
+        report.add("Validation", "Branch lifecycle events recorded", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Validate metrics captured
     t0 = time.time()
@@ -1563,51 +1782,68 @@ def phase_validation(token: str, report: TestReport) -> bool:
         metrics = sql_query_rows(
             f"SELECT metric_name, COUNT(*) as cnt "
             f"FROM {OPS_CATALOG}.{OPS_SCHEMA}.lakebase_metrics "
-            f"GROUP BY metric_name ORDER BY cnt DESC", token
+            f"GROUP BY metric_name ORDER BY cnt DESC",
+            token,
         )
         metric_names = [m["metric_name"] for m in metrics]
-        report.add("Validation", "Health metrics captured",
-                    "PASS" if len(metric_names) > 0 else "WARN",
-                    message=f"{len(metric_names)} metric types",
-                    duration=time.time() - t0)
+        report.add(
+            "Validation",
+            "Health metrics captured",
+            "PASS" if len(metric_names) > 0 else "WARN",
+            message=f"{len(metric_names)} metric types",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("Validation", "Health metrics captured",
-                    "FAIL", message=str(e), duration=time.time() - t0)
+        report.add("Validation", "Health metrics captured", "FAIL", message=str(e), duration=time.time() - t0)
 
     # Validate PG17 columns exist in pg_stat_history schema
     t0 = time.time()
     try:
-        cols = sql_query_rows(
-            f"DESCRIBE {OPS_CATALOG}.{OPS_SCHEMA}.pg_stat_history", token
-        )
+        cols = sql_query_rows(f"DESCRIBE {OPS_CATALOG}.{OPS_SCHEMA}.pg_stat_history", token)
         col_names = [c.get("col_name", "") for c in cols]
-        pg17_cols = ["wal_records", "wal_fpi", "wal_bytes", "jit_functions",
-                     "jit_generation_time", "temp_blks_read"]
-        found = [c for c in pg17_cols if c in col_names]
+        pg17_cols = ["wal_records", "wal_fpi", "wal_bytes", "jit_functions", "jit_generation_time", "temp_blks_read"]
+        [c for c in pg17_cols if c in col_names]
         missing = [c for c in pg17_cols if c not in col_names]
         if not missing:
-            report.add("Validation", "PG17 columns in pg_stat_history schema",
-                        "PASS", message=f"All {len(pg17_cols)} present",
-                        duration=time.time() - t0)
+            report.add(
+                "Validation",
+                "PG17 columns in pg_stat_history schema",
+                "PASS",
+                message=f"All {len(pg17_cols)} present",
+                duration=time.time() - t0,
+            )
         else:
-            report.add("Validation", "PG17 columns in pg_stat_history schema",
-                        "FAIL", message=f"Missing: {missing}",
-                        duration=time.time() - t0)
+            report.add(
+                "Validation",
+                "PG17 columns in pg_stat_history schema",
+                "FAIL",
+                message=f"Missing: {missing}",
+                duration=time.time() - t0,
+            )
     except Exception as e:
-        report.add("Validation", "PG17 columns in pg_stat_history schema",
-                    "FAIL", message=str(e), duration=time.time() - t0)
+        report.add(
+            "Validation", "PG17 columns in pg_stat_history schema", "FAIL", message=str(e), duration=time.time() - t0
+        )
 
     # Validate compute_status NOT in pg_stat_history schema
     t0 = time.time()
     try:
         has_compute_status = "compute_status" in col_names
-        report.add("Validation", "compute_status removed from pg_stat_history",
-                    "PASS" if not has_compute_status else "FAIL",
-                    message="Removed" if not has_compute_status else "Still present!",
-                    duration=time.time() - t0)
+        report.add(
+            "Validation",
+            "compute_status removed from pg_stat_history",
+            "PASS" if not has_compute_status else "FAIL",
+            message="Removed" if not has_compute_status else "Still present!",
+            duration=time.time() - t0,
+        )
     except Exception as e:
-        report.add("Validation", "compute_status removed from pg_stat_history",
-                    "FAIL", message=str(e), duration=time.time() - t0)
+        report.add(
+            "Validation",
+            "compute_status removed from pg_stat_history",
+            "FAIL",
+            message=str(e),
+            duration=time.time() - t0,
+        )
 
     print("  Validation phase complete.")
     return all_passed
@@ -1617,10 +1853,15 @@ def phase_validation(token: str, report: TestReport) -> bool:
 # Main
 # =============================================================================
 
+
 async def main():
     parser = argparse.ArgumentParser(description="LakebaseOps Deploy & Test")
-    parser.add_argument("--phase", choices=["infra", "branches", "data", "agents", "validate", "all"],
-                        default="all", help="Run specific phase")
+    parser.add_argument(
+        "--phase",
+        choices=["infra", "branches", "data", "agents", "validate", "all"],
+        default="all",
+        help="Run specific phase",
+    )
     parser.add_argument("--skip-data", action="store_true", help="Skip synthetic data generation")
     args = parser.parse_args()
 

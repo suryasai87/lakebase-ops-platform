@@ -1,6 +1,5 @@
 """Response models for the agents router."""
 
-from typing import Optional
 from pydantic import BaseModel
 
 
@@ -9,7 +8,7 @@ class AgentTool(BaseModel):
 
     name: str
     module: str
-    schedule: Optional[str] = None
+    schedule: str | None = None
     risk: str
 
 

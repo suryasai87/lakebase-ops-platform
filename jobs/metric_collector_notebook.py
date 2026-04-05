@@ -5,15 +5,17 @@
 
 # COMMAND ----------
 
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, "/Workspace/Repos/lakebase-ops")
 os.environ.setdefault("OPS_CATALOG", "ops_catalog")
 os.environ.setdefault("OPS_SCHEMA", "lakebase_ops")
 
 # COMMAND ----------
 
-from agents.performance import PerformanceAgent
 from agents.health import HealthAgent
+from agents.performance import PerformanceAgent
 from config import settings
 
 project_id = dbutils.widgets.get("project_id") if "dbutils" in dir() else settings.LAKEBASE_PROJECT_ID

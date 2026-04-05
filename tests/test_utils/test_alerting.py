@@ -1,13 +1,11 @@
 """Tests for AlertManager: routing, severity filtering, channel dispatch, DBSQL definitions."""
 
-import pytest
-
-from utils.alerting import Alert, AlertManager, AlertSeverity, AlertChannel
-
+from utils.alerting import Alert, AlertChannel, AlertSeverity
 
 # ---------------------------------------------------------------------------
 # Alert dataclass
 # ---------------------------------------------------------------------------
+
 
 class TestAlertDataclass:
     def test_alert_creation(self):
@@ -44,8 +42,11 @@ class TestAlertDataclass:
 
     def test_alert_default_fields(self):
         alert = Alert(
-            alert_id="x", severity=AlertSeverity.INFO,
-            title="t", message="m", source_agent="a",
+            alert_id="x",
+            severity=AlertSeverity.INFO,
+            title="t",
+            message="m",
+            source_agent="a",
         )
         assert alert.metric_name == ""
         assert alert.metric_value == 0.0
@@ -57,6 +58,7 @@ class TestAlertDataclass:
 # AlertSeverity enum
 # ---------------------------------------------------------------------------
 
+
 class TestAlertSeverity:
     def test_enum_values(self):
         assert AlertSeverity.INFO.value == "info"
@@ -67,6 +69,7 @@ class TestAlertSeverity:
 # ---------------------------------------------------------------------------
 # AlertChannel enum
 # ---------------------------------------------------------------------------
+
 
 class TestAlertChannel:
     def test_channel_values(self):
@@ -80,6 +83,7 @@ class TestAlertChannel:
 # ---------------------------------------------------------------------------
 # AlertManager routing
 # ---------------------------------------------------------------------------
+
 
 class TestAlertRouting:
     def test_info_routes_to_log_only(self, mock_alerts):
@@ -103,11 +107,15 @@ class TestAlertRouting:
 # Sending alerts
 # ---------------------------------------------------------------------------
 
+
 class TestSendAlert:
     def test_send_info_alert(self, mock_alerts):
         alert = Alert(
-            alert_id="a1", severity=AlertSeverity.INFO,
-            title="Info", message="FYI", source_agent="test",
+            alert_id="a1",
+            severity=AlertSeverity.INFO,
+            title="Info",
+            message="FYI",
+            source_agent="test",
         )
         returned = mock_alerts.send_alert(alert)
         assert returned is alert
@@ -116,8 +124,11 @@ class TestSendAlert:
 
     def test_send_warning_alert(self, mock_alerts):
         alert = Alert(
-            alert_id="a2", severity=AlertSeverity.WARNING,
-            title="Warning", message="Watch out", source_agent="test",
+            alert_id="a2",
+            severity=AlertSeverity.WARNING,
+            title="Warning",
+            message="Watch out",
+            source_agent="test",
         )
         mock_alerts.send_alert(alert)
         assert "slack" in alert.channels_sent
@@ -125,8 +136,11 @@ class TestSendAlert:
 
     def test_send_critical_alert(self, mock_alerts):
         alert = Alert(
-            alert_id="a3", severity=AlertSeverity.CRITICAL,
-            title="Critical", message="Act now", source_agent="test",
+            alert_id="a3",
+            severity=AlertSeverity.CRITICAL,
+            title="Critical",
+            message="Act now",
+            source_agent="test",
         )
         mock_alerts.send_alert(alert)
         assert "slack" in alert.channels_sent
@@ -135,18 +149,26 @@ class TestSendAlert:
 
     def test_alert_added_to_history(self, mock_alerts):
         alert = Alert(
-            alert_id="a4", severity=AlertSeverity.WARNING,
-            title="W", message="m", source_agent="test",
+            alert_id="a4",
+            severity=AlertSeverity.WARNING,
+            title="W",
+            message="m",
+            source_agent="test",
         )
         mock_alerts.send_alert(alert)
         assert len(mock_alerts.get_alert_history()) == 1
 
     def test_multiple_alerts_in_history(self, mock_alerts):
         for i in range(5):
-            mock_alerts.send_alert(Alert(
-                alert_id=f"a{i}", severity=AlertSeverity.INFO,
-                title=f"Alert {i}", message="m", source_agent="test",
-            ))
+            mock_alerts.send_alert(
+                Alert(
+                    alert_id=f"a{i}",
+                    severity=AlertSeverity.INFO,
+                    title=f"Alert {i}",
+                    message="m",
+                    source_agent="test",
+                )
+            )
         assert len(mock_alerts.get_alert_history()) == 5
 
 
@@ -154,20 +176,36 @@ class TestSendAlert:
 # History filtering
 # ---------------------------------------------------------------------------
 
+
 class TestAlertHistory:
     def test_filter_by_severity(self, mock_alerts):
-        mock_alerts.send_alert(Alert(
-            alert_id="w1", severity=AlertSeverity.WARNING,
-            title="W", message="m", source_agent="test",
-        ))
-        mock_alerts.send_alert(Alert(
-            alert_id="c1", severity=AlertSeverity.CRITICAL,
-            title="C", message="m", source_agent="test",
-        ))
-        mock_alerts.send_alert(Alert(
-            alert_id="i1", severity=AlertSeverity.INFO,
-            title="I", message="m", source_agent="test",
-        ))
+        mock_alerts.send_alert(
+            Alert(
+                alert_id="w1",
+                severity=AlertSeverity.WARNING,
+                title="W",
+                message="m",
+                source_agent="test",
+            )
+        )
+        mock_alerts.send_alert(
+            Alert(
+                alert_id="c1",
+                severity=AlertSeverity.CRITICAL,
+                title="C",
+                message="m",
+                source_agent="test",
+            )
+        )
+        mock_alerts.send_alert(
+            Alert(
+                alert_id="i1",
+                severity=AlertSeverity.INFO,
+                title="I",
+                message="m",
+                source_agent="test",
+            )
+        )
         warnings = mock_alerts.get_alert_history(severity=AlertSeverity.WARNING)
         assert len(warnings) == 1
         assert warnings[0].alert_id == "w1"
@@ -177,16 +215,22 @@ class TestAlertHistory:
 
     def test_get_all_history(self, mock_alerts):
         for sev in AlertSeverity:
-            mock_alerts.send_alert(Alert(
-                alert_id=sev.value, severity=sev,
-                title=sev.value, message="m", source_agent="test",
-            ))
+            mock_alerts.send_alert(
+                Alert(
+                    alert_id=sev.value,
+                    severity=sev,
+                    title=sev.value,
+                    message="m",
+                    source_agent="test",
+                )
+            )
         assert len(mock_alerts.get_alert_history()) == 3
 
 
 # ---------------------------------------------------------------------------
 # Alert summary
 # ---------------------------------------------------------------------------
+
 
 class TestAlertSummary:
     def test_summary_empty(self, mock_alerts):
@@ -195,14 +239,25 @@ class TestAlertSummary:
         assert summary["auto_remediation_rate"] == "N/A"
 
     def test_summary_with_alerts(self, mock_alerts):
-        mock_alerts.send_alert(Alert(
-            alert_id="1", severity=AlertSeverity.WARNING,
-            title="W", message="m", source_agent="test",
-        ))
-        mock_alerts.send_alert(Alert(
-            alert_id="2", severity=AlertSeverity.CRITICAL,
-            title="C", message="m", source_agent="test", auto_remediated=True,
-        ))
+        mock_alerts.send_alert(
+            Alert(
+                alert_id="1",
+                severity=AlertSeverity.WARNING,
+                title="W",
+                message="m",
+                source_agent="test",
+            )
+        )
+        mock_alerts.send_alert(
+            Alert(
+                alert_id="2",
+                severity=AlertSeverity.CRITICAL,
+                title="C",
+                message="m",
+                source_agent="test",
+                auto_remediated=True,
+            )
+        )
         summary = mock_alerts.get_alert_summary()
         assert summary["total_alerts"] == 2
         assert summary["by_severity"]["warning"] == 1
@@ -215,6 +270,7 @@ class TestAlertSummary:
 # Channel configuration
 # ---------------------------------------------------------------------------
 
+
 class TestChannelConfig:
     def test_configure_channel(self, mock_alerts):
         mock_alerts.configure_channel(AlertChannel.SLACK, {"webhook_url": "https://hooks.slack.com/xxx"})
@@ -225,6 +281,7 @@ class TestChannelConfig:
 # ---------------------------------------------------------------------------
 # DBSQL alert definitions
 # ---------------------------------------------------------------------------
+
 
 class TestDBSQLAlerts:
     def test_dbsql_definitions_generated(self, mock_alerts):

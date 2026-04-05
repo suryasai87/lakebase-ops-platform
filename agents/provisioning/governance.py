@@ -20,8 +20,7 @@ logger = logging.getLogger("lakebase_ops.provisioning")
 class GovernanceMixin:
     """Mixin providing governance, RLS, Unity Catalog, and combined provisioning workflows."""
 
-    def configure_rls(self, project_id: str, branch_id: str,
-                      tenants: list[str] = None) -> dict:
+    def configure_rls(self, project_id: str, branch_id: str, tenants: list[str] | None = None) -> dict:
         """
         Setup row-level security for multi-tenant isolation.
         Tasks 33-36.
@@ -50,8 +49,7 @@ class GovernanceMixin:
             "statements_executed": len(rls_statements),
         }
 
-    def setup_unity_catalog_integration(self, project_id: str, uc_catalog: str,
-                                        domain: str = "") -> dict:
+    def setup_unity_catalog_integration(self, project_id: str, uc_catalog: str, domain: str = "") -> dict:
         """
         Align Lakebase project with Unity Catalog governance.
         Tasks 50-54.
@@ -94,17 +92,16 @@ class GovernanceMixin:
             ],
             "claude_md_instruction": (
                 "## AI Agent Database Branching\n"
-                f"- Create branches from development with 1h TTL\n"
-                f"- Branch name: ai-agent-test\n"
-                f"- Always validate with Schema Diff before suggesting migration\n"
-                f"- Never apply migrations to production or staging directly\n"
+                "- Create branches from development with 1h TTL\n"
+                "- Branch name: ai-agent-test\n"
+                "- Always validate with Schema Diff before suggesting migration\n"
+                "- Never apply migrations to production or staging directly\n"
             ),
         }
 
         return agent_config
 
-    def validate_branch_masking(self, project_id: str, branch_id: str,
-                                parent_branch_id: str = "main") -> dict:
+    def validate_branch_masking(self, project_id: str, branch_id: str, parent_branch_id: str = "main") -> dict:
         """
         Validate that UC masking policies from the parent branch propagate
         to a child branch.
@@ -129,22 +126,12 @@ class GovernanceMixin:
             "ORDER BY column_name"
         )
 
-        parent_policies = self.client.execute_statement(
-            project_id, parent_branch_id, masking_query
-        )
-        branch_policies = self.client.execute_statement(
-            project_id, branch_id, masking_query
-        )
+        parent_policies = self.client.execute_statement(project_id, parent_branch_id, masking_query)
+        branch_policies = self.client.execute_statement(project_id, branch_id, masking_query)
 
         # Build sets of (column, function) tuples for comparison
-        parent_set = {
-            (r.get("column_name"), r.get("masking_function_name"))
-            for r in (parent_policies or [])
-        }
-        branch_set = {
-            (r.get("column_name"), r.get("masking_function_name"))
-            for r in (branch_policies or [])
-        }
+        parent_set = {(r.get("column_name"), r.get("masking_function_name")) for r in (parent_policies or [])}
+        branch_set = {(r.get("column_name"), r.get("masking_function_name")) for r in (branch_policies or [])}
 
         missing = parent_set - branch_set
         extra = branch_set - parent_set
@@ -157,29 +144,18 @@ class GovernanceMixin:
             "compliant": compliant,
             "parent_policy_count": len(parent_set),
             "branch_policy_count": len(branch_set),
-            "missing_policies": [
-                {"column": col, "function": fn} for col, fn in sorted(missing)
-            ],
-            "extra_policies": [
-                {"column": col, "function": fn} for col, fn in sorted(extra)
-            ],
+            "missing_policies": [{"column": col, "function": fn} for col, fn in sorted(missing)],
+            "extra_policies": [{"column": col, "function": fn} for col, fn in sorted(extra)],
         }
 
         if not compliant:
-            logger.warning(
-                f"Masking compliance FAILED for branch {branch_id}: "
-                f"{len(missing)} missing policies"
-            )
+            logger.warning(f"Masking compliance FAILED for branch {branch_id}: {len(missing)} missing policies")
         else:
-            logger.info(
-                f"Masking compliance OK for branch {branch_id}: "
-                f"{len(parent_set)} policies verified"
-            )
+            logger.info(f"Masking compliance OK for branch {branch_id}: {len(parent_set)} policies verified")
 
         return result
 
-    def register_lakebase_catalog(self, project_id: str, branch_id: str,
-                                   catalog_name: str | None = None) -> dict:
+    def register_lakebase_catalog(self, project_id: str, branch_id: str, catalog_name: str | None = None) -> dict:
         """
         Register a Lakebase database as a Unity Catalog catalog.
         GAP-034: Uses POST /api/2.0/postgres/catalogs for federated queries.
@@ -212,11 +188,15 @@ class GovernanceMixin:
             "status": result.get("status", "unknown"),
         }
 
-    def provision_with_governance(self, project_name: str, domain: str,
-                                  environment: str = "production",
-                                  branching_pattern: str = "multi_env_pipeline",
-                                  tenants: list[str] = None,
-                                  uc_catalog: str = "ops_catalog") -> dict:
+    def provision_with_governance(
+        self,
+        project_name: str,
+        domain: str,
+        environment: str = "production",
+        branching_pattern: str = "multi_env_pipeline",
+        tenants: list[str] | None = None,
+        uc_catalog: str = "ops_catalog",
+    ) -> dict:
         """
         Full project setup with all governance and integrations.
         Combined workflow: all 59 setup tasks.
@@ -227,18 +207,14 @@ class GovernanceMixin:
         results["ops_catalog"] = self.create_ops_catalog()
 
         # 2. Provision project with branches
-        results["project"] = self.provision_lakebase_project(
-            project_name, domain, environment, branching_pattern
-        )
+        results["project"] = self.provision_lakebase_project(project_name, domain, environment, branching_pattern)
 
         # 3. Setup RLS if tenants specified
         if tenants:
             results["rls"] = self.configure_rls(project_name, "production", tenants)
 
         # 4. Unity Catalog integration
-        results["uc_integration"] = self.setup_unity_catalog_integration(
-            project_name, uc_catalog, domain
-        )
+        results["uc_integration"] = self.setup_unity_catalog_integration(project_name, uc_catalog, domain)
 
         # 5. CI/CD pipeline
         results["cicd"] = self.setup_cicd_pipeline(project_name)

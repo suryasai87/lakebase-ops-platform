@@ -85,8 +85,13 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "S106"]
-"jobs/**/*.py" = ["T201"]
-"deploy_and_test.py" = ["T201"]
+"jobs/**/*.py" = ["T201", "F821", "S603", "S607"]  # dbutils + subprocess with static CLI args
+"deploy_and_test.py" = ["T201", "N814", "N817", "S603", "S607"] # agent aliases + subprocess
+"app/build.py" = ["S603", "S607"]       # subprocess calls with static args
+"app/deploy_to_databricks.py" = ["S603", "S607"]
+"cicd_templates/**/*.py" = ["S603", "S607"]
+"utils/delta_writer.py" = ["S603", "S607"]
+"utils/lakebase_client.py" = ["S603", "S607"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["agents", "config", "framework", "utils"]

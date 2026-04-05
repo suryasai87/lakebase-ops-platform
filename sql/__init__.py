@@ -1,1 +1,1 @@
-from .queries import *  # noqa: F401,F403
+from .queries import *  # noqa: F403

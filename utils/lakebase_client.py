@@ -15,8 +15,7 @@ import logging
 import subprocess
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("lakebase_ops.client")
 
@@ -24,6 +23,7 @@ logger = logging.getLogger("lakebase_ops.client")
 @dataclass
 class OAuthToken:
     """OAuth token with expiry tracking."""
+
     token: str
     issued_at: float = field(default_factory=time.time)
     ttl_seconds: int = 3600  # 1 hour
@@ -41,6 +41,7 @@ class OAuthToken:
 @dataclass
 class BranchEndpoint:
     """Lakebase branch connection endpoint."""
+
     project_id: str
     branch_id: str
     endpoint_id: str
@@ -66,6 +67,7 @@ class LakebaseClient:
         if not mock_mode:
             try:
                 from databricks.sdk import WorkspaceClient
+
                 self._workspace_client = WorkspaceClient()
             except ImportError:
                 logger.warning("databricks-sdk not available, falling back to mock mode")
@@ -81,9 +83,7 @@ class LakebaseClient:
         if self.mock_mode:
             token = OAuthToken(token=f"mock_token_{int(time.time())}")
         else:
-            cred = self._workspace_client.postgres.generate_database_credential(
-                endpoint=endpoint_name
-            )
+            cred = self._workspace_client.postgres.generate_database_credential(endpoint=endpoint_name)
             token = OAuthToken(token=cred.token)
 
         self._tokens[endpoint_name] = token
@@ -114,6 +114,7 @@ class LakebaseClient:
             token = self._get_token(endpoint_name)
             endpoint = self._workspace_client.postgres.get_endpoint(name=endpoint_name)
             import psycopg
+
             conn = psycopg.connect(
                 host=endpoint.status.hosts.host,
                 port=5432,
@@ -129,7 +130,7 @@ class LakebaseClient:
             logger.error(f"Connection to branch {branch_id} failed: {e}")
             raise
 
-    def execute_query(self, project_id: str, branch_id: str, query: str, params: tuple = None) -> list[dict]:
+    def execute_query(self, project_id: str, branch_id: str, query: str, params: tuple | None = None) -> list[dict]:
         """Execute a query against a Lakebase branch and return results as dicts."""
         conn = self.get_connection(project_id, branch_id)
         if conn is None:
@@ -142,9 +143,9 @@ class LakebaseClient:
             cur.execute(query, params)
             columns = [desc[0] for desc in cur.description] if cur.description else []
             rows = cur.fetchall()
-            return [dict(zip(columns, row)) for row in rows]
+            return [dict(zip(columns, row, strict=False)) for row in rows]
 
-    def execute_statement(self, project_id: str, branch_id: str, statement: str, params: tuple = None) -> int:
+    def execute_statement(self, project_id: str, branch_id: str, statement: str, params: tuple | None = None) -> int:
         """Execute a DDL/DML statement. Returns affected row count."""
         conn = self.get_connection(project_id, branch_id)
         if conn is None:
@@ -161,19 +162,23 @@ class LakebaseClient:
 
     # --- Lakebase Project/Branch Management ---
 
-    def create_project(self, project_id: str, spec: dict = None) -> dict:
+    def create_project(self, project_id: str, spec: dict | None = None) -> dict:
         """Create a new Lakebase project."""
         if self.mock_mode:
             logger.info(f"[MOCK] Creating project: {project_id}")
             return {"name": f"projects/{project_id}", "status": "ACTIVE", "spec": spec or {}}
 
-        result = self._workspace_client.postgres.create_project(
-            project_id=project_id, spec=spec
-        )
+        result = self._workspace_client.postgres.create_project(project_id=project_id, spec=spec)
         return {"name": result.name, "status": str(result.status)}
 
-    def create_branch(self, project_id: str, branch_id: str, source_branch: str = "production",
-                      ttl_seconds: Optional[int] = None, is_protected: bool = False) -> dict:
+    def create_branch(
+        self,
+        project_id: str,
+        branch_id: str,
+        source_branch: str = "production",
+        ttl_seconds: int | None = None,
+        is_protected: bool = False,
+    ) -> dict:
         """Create a Lakebase branch with naming conventions and TTL."""
         if self.mock_mode:
             logger.info(f"[MOCK] Creating branch: {branch_id} from {source_branch} (TTL: {ttl_seconds}s)")
@@ -216,9 +221,7 @@ class LakebaseClient:
             return True
 
         try:
-            self._workspace_client.postgres.delete_branch(
-                name=f"projects/{project_id}/branches/{branch_id}"
-            )
+            self._workspace_client.postgres.delete_branch(name=f"projects/{project_id}/branches/{branch_id}")
             return True
         except Exception as e:
             logger.error(f"Failed to delete branch {branch_id}: {e}")
@@ -269,8 +272,7 @@ class LakebaseClient:
         resp = self._api_request("GET", path)
         return resp.get("spec", {}).get("custom_tags", {})
 
-    def register_catalog(self, project_id: str, branch_id: str,
-                         catalog_name: str) -> dict:
+    def register_catalog(self, project_id: str, branch_id: str, catalog_name: str) -> dict:
         """
         Register a Lakebase database as a Unity Catalog catalog.
         GAP-034: Uses POST /api/2.0/postgres/catalogs.
@@ -334,9 +336,7 @@ class LakebaseClient:
             logger.info(f"[MOCK] Resetting branch: {branch_id}")
             return True
 
-        self._workspace_client.postgres.reset_branch(
-            name=f"projects/{project_id}/branches/{branch_id}"
-        )
+        self._workspace_client.postgres.reset_branch(name=f"projects/{project_id}/branches/{branch_id}")
         return True
 
     # --- REST API Methods (no SDK needed) ---
@@ -345,9 +345,10 @@ class LakebaseClient:
         """Get Databricks OAuth token via CLI."""
         try:
             result = subprocess.run(
-                ["databricks", "auth", "token", "--profile", "DEFAULT", "--host",
-                 f"https://{self.workspace_host}"],
-                capture_output=True, text=True, timeout=30,
+                ["databricks", "auth", "token", "--profile", "DEFAULT", "--host", f"https://{self.workspace_host}"],
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             if result.returncode == 0:
                 data = json.loads(result.stdout)
@@ -356,9 +357,10 @@ class LakebaseClient:
             logger.warning(f"Failed to get token via CLI: {e}")
         return ""
 
-    def _api_request(self, method: str, path: str, body: dict = None) -> dict:
+    def _api_request(self, method: str, path: str, body: dict | None = None) -> dict:
         """Make a REST API request to the Databricks workspace."""
         import requests
+
         token = self._get_databricks_token()
         url = f"https://{self.workspace_host}{path}"
         headers = {
@@ -369,8 +371,7 @@ class LakebaseClient:
         resp.raise_for_status()
         return resp.json() if resp.text else {}
 
-    def _sql_api_execute(self, statement: str, warehouse_id: str,
-                         wait_timeout: str = "30s") -> dict:
+    def _sql_api_execute(self, statement: str, warehouse_id: str, wait_timeout: str = "30s") -> dict:
         """Execute a SQL statement via the Statement Execution API."""
         body = {
             "warehouse_id": warehouse_id,
@@ -389,8 +390,9 @@ class LakebaseClient:
         resp = self._api_request("GET", path)
         return resp.get("branches", [])
 
-    def api_create_branch(self, project_id: str, branch_name: str,
-                          source_branch_id: str, ttl_seconds: Optional[int] = None) -> dict:
+    def api_create_branch(
+        self, project_id: str, branch_name: str, source_branch_id: str, ttl_seconds: int | None = None
+    ) -> dict:
         """Create a Lakebase branch via REST API."""
         if self.mock_mode:
             return self.create_branch(project_id, branch_name, source_branch_id, ttl_seconds)
@@ -430,10 +432,10 @@ class LakebaseClient:
         resp = self._api_request("POST", "/api/2.0/postgres/credentials", body)
         return resp.get("token", "")
 
-    def get_pg_connection(self, host: str, password: str, port: int = 5432,
-                          dbname: str = "databricks_postgres") -> Any:
+    def get_pg_connection(self, host: str, password: str, port: int = 5432, dbname: str = "databricks_postgres") -> Any:
         """Get a direct psycopg connection using host + OAuth password."""
         import psycopg
+
         conn = psycopg.connect(
             host=host,
             port=port,
@@ -447,12 +449,12 @@ class LakebaseClient:
 
     def close_all(self):
         """Close all connections."""
-        for key, conn in self._connections.items():
+        for _key, conn in self._connections.items():
             try:
-                if hasattr(conn, 'close'):
+                if hasattr(conn, "close"):
                     conn.close()
-            except Exception:
-                pass
+            except Exception:  # noqa: S110
+                pass  # Best-effort cleanup during connection pool teardown
         self._connections.clear()
         self._tokens.clear()
 
@@ -470,31 +472,64 @@ class MockConnection:
         return {
             "pg_stat_statements": [
                 {
-                    "queryid": 1001, "query": "SELECT * FROM orders WHERE customer_id = $1",
-                    "calls": 15000, "total_exec_time": 45000.0, "mean_exec_time": 3.0,
-                    "rows": 75000, "shared_blks_hit": 500000, "shared_blks_read": 5000,
-                    "temp_blks_written": 0, "temp_blks_read": 0,
-                    "wal_records": 0, "wal_fpi": 0, "wal_bytes": 0,
-                    "jit_functions": 0, "jit_generation_time": 0.0,
-                    "jit_inlining_time": 0.0, "jit_optimization_time": 0.0, "jit_emission_time": 0.0,
+                    "queryid": 1001,
+                    "query": "SELECT * FROM orders WHERE customer_id = $1",
+                    "calls": 15000,
+                    "total_exec_time": 45000.0,
+                    "mean_exec_time": 3.0,
+                    "rows": 75000,
+                    "shared_blks_hit": 500000,
+                    "shared_blks_read": 5000,
+                    "temp_blks_written": 0,
+                    "temp_blks_read": 0,
+                    "wal_records": 0,
+                    "wal_fpi": 0,
+                    "wal_bytes": 0,
+                    "jit_functions": 0,
+                    "jit_generation_time": 0.0,
+                    "jit_inlining_time": 0.0,
+                    "jit_optimization_time": 0.0,
+                    "jit_emission_time": 0.0,
                 },
                 {
-                    "queryid": 1002, "query": "INSERT INTO events (type, data) VALUES ($1, $2)",
-                    "calls": 50000, "total_exec_time": 25000.0, "mean_exec_time": 0.5,
-                    "rows": 50000, "shared_blks_hit": 200000, "shared_blks_read": 1000,
-                    "temp_blks_written": 100, "temp_blks_read": 50,
-                    "wal_records": 50000, "wal_fpi": 500, "wal_bytes": 25600000,
-                    "jit_functions": 0, "jit_generation_time": 0.0,
-                    "jit_inlining_time": 0.0, "jit_optimization_time": 0.0, "jit_emission_time": 0.0,
+                    "queryid": 1002,
+                    "query": "INSERT INTO events (type, data) VALUES ($1, $2)",
+                    "calls": 50000,
+                    "total_exec_time": 25000.0,
+                    "mean_exec_time": 0.5,
+                    "rows": 50000,
+                    "shared_blks_hit": 200000,
+                    "shared_blks_read": 1000,
+                    "temp_blks_written": 100,
+                    "temp_blks_read": 50,
+                    "wal_records": 50000,
+                    "wal_fpi": 500,
+                    "wal_bytes": 25600000,
+                    "jit_functions": 0,
+                    "jit_generation_time": 0.0,
+                    "jit_inlining_time": 0.0,
+                    "jit_optimization_time": 0.0,
+                    "jit_emission_time": 0.0,
                 },
                 {
-                    "queryid": 1003, "query": "SELECT o.*, p.name FROM orders o JOIN products p ON o.product_id = p.id WHERE o.status = $1",
-                    "calls": 8000, "total_exec_time": 160000.0, "mean_exec_time": 20.0,
-                    "rows": 40000, "shared_blks_hit": 300000, "shared_blks_read": 50000,
-                    "temp_blks_written": 5000, "temp_blks_read": 3000,
-                    "wal_records": 0, "wal_fpi": 0, "wal_bytes": 0,
-                    "jit_functions": 12, "jit_generation_time": 5.2,
-                    "jit_inlining_time": 3.1, "jit_optimization_time": 8.4, "jit_emission_time": 2.7,
+                    "queryid": 1003,
+                    "query": "SELECT o.*, p.name FROM orders o JOIN products p ON o.product_id = p.id WHERE o.status = $1",
+                    "calls": 8000,
+                    "total_exec_time": 160000.0,
+                    "mean_exec_time": 20.0,
+                    "rows": 40000,
+                    "shared_blks_hit": 300000,
+                    "shared_blks_read": 50000,
+                    "temp_blks_written": 5000,
+                    "temp_blks_read": 3000,
+                    "wal_records": 0,
+                    "wal_fpi": 0,
+                    "wal_bytes": 0,
+                    "jit_functions": 12,
+                    "jit_generation_time": 5.2,
+                    "jit_inlining_time": 3.1,
+                    "jit_optimization_time": 8.4,
+                    "jit_emission_time": 2.7,
                 },
             ],
             "pg_stat_statements_info": [
@@ -502,51 +537,108 @@ class MockConnection:
             ],
             "pg_stat_user_tables": [
                 {
-                    "schemaname": "public", "relname": "orders", "n_live_tup": 5000000,
-                    "n_dead_tup": 800000, "seq_scan": 150, "idx_scan": 45000,
-                    "last_vacuum": "2026-02-20 02:00:00", "last_autovacuum": "2026-02-20 14:00:00",
-                    "last_analyze": "2026-02-20 02:00:00", "last_autoanalyze": "2026-02-20 14:00:00",
+                    "schemaname": "public",
+                    "relname": "orders",
+                    "n_live_tup": 5000000,
+                    "n_dead_tup": 800000,
+                    "seq_scan": 150,
+                    "idx_scan": 45000,
+                    "last_vacuum": "2026-02-20 02:00:00",
+                    "last_autovacuum": "2026-02-20 14:00:00",
+                    "last_analyze": "2026-02-20 02:00:00",
+                    "last_autoanalyze": "2026-02-20 14:00:00",
                 },
                 {
-                    "schemaname": "public", "relname": "events", "n_live_tup": 20000000,
-                    "n_dead_tup": 5000000, "seq_scan": 500, "idx_scan": 1000,
-                    "last_vacuum": "2026-02-19 02:00:00", "last_autovacuum": "2026-02-19 08:00:00",
-                    "last_analyze": "2026-02-19 02:00:00", "last_autoanalyze": "2026-02-19 08:00:00",
+                    "schemaname": "public",
+                    "relname": "events",
+                    "n_live_tup": 20000000,
+                    "n_dead_tup": 5000000,
+                    "seq_scan": 500,
+                    "idx_scan": 1000,
+                    "last_vacuum": "2026-02-19 02:00:00",
+                    "last_autovacuum": "2026-02-19 08:00:00",
+                    "last_analyze": "2026-02-19 02:00:00",
+                    "last_autoanalyze": "2026-02-19 08:00:00",
                 },
                 {
-                    "schemaname": "public", "relname": "users", "n_live_tup": 100000,
-                    "n_dead_tup": 500, "seq_scan": 10, "idx_scan": 80000,
-                    "last_vacuum": "2026-02-21 02:00:00", "last_autovacuum": "2026-02-21 06:00:00",
-                    "last_analyze": "2026-02-21 02:00:00", "last_autoanalyze": "2026-02-21 06:00:00",
+                    "schemaname": "public",
+                    "relname": "users",
+                    "n_live_tup": 100000,
+                    "n_dead_tup": 500,
+                    "seq_scan": 10,
+                    "idx_scan": 80000,
+                    "last_vacuum": "2026-02-21 02:00:00",
+                    "last_autovacuum": "2026-02-21 06:00:00",
+                    "last_analyze": "2026-02-21 02:00:00",
+                    "last_autoanalyze": "2026-02-21 06:00:00",
                 },
             ],
             "pg_stat_user_indexes": [
                 {
-                    "schemaname": "public", "relname": "orders", "indexrelname": "idx_orders_customer_id",
-                    "idx_scan": 45000, "idx_tup_read": 90000, "index_size_bytes": 104857600,
-                    "indisunique": False, "indisprimary": False,
+                    "schemaname": "public",
+                    "relname": "orders",
+                    "indexrelname": "idx_orders_customer_id",
+                    "idx_scan": 45000,
+                    "idx_tup_read": 90000,
+                    "index_size_bytes": 104857600,
+                    "indisunique": False,
+                    "indisprimary": False,
                 },
                 {
-                    "schemaname": "public", "relname": "orders", "indexrelname": "idx_orders_old_status",
-                    "idx_scan": 0, "idx_tup_read": 0, "index_size_bytes": 52428800,
-                    "indisunique": False, "indisprimary": False,
+                    "schemaname": "public",
+                    "relname": "orders",
+                    "indexrelname": "idx_orders_old_status",
+                    "idx_scan": 0,
+                    "idx_tup_read": 0,
+                    "index_size_bytes": 52428800,
+                    "indisunique": False,
+                    "indisprimary": False,
                 },
                 {
-                    "schemaname": "public", "relname": "events", "indexrelname": "idx_events_type",
-                    "idx_scan": 1000, "idx_tup_read": 5000000, "index_size_bytes": 209715200,
-                    "indisunique": False, "indisprimary": False,
+                    "schemaname": "public",
+                    "relname": "events",
+                    "indexrelname": "idx_events_type",
+                    "idx_scan": 1000,
+                    "idx_tup_read": 5000000,
+                    "index_size_bytes": 209715200,
+                    "indisunique": False,
+                    "indisprimary": False,
                 },
             ],
             "pg_stat_activity": [
-                {"pid": 101, "state": "active", "query": "SELECT 1", "wait_event_type": None, "backend_start": "2026-02-21 10:00:00"},
-                {"pid": 102, "state": "idle", "query": "", "wait_event_type": None, "backend_start": "2026-02-21 08:00:00"},
-                {"pid": 103, "state": "idle in transaction", "query": "UPDATE orders SET ...", "wait_event_type": "Lock", "backend_start": "2026-02-21 09:30:00"},
+                {
+                    "pid": 101,
+                    "state": "active",
+                    "query": "SELECT 1",
+                    "wait_event_type": None,
+                    "backend_start": "2026-02-21 10:00:00",
+                },
+                {
+                    "pid": 102,
+                    "state": "idle",
+                    "query": "",
+                    "wait_event_type": None,
+                    "backend_start": "2026-02-21 08:00:00",
+                },
+                {
+                    "pid": 103,
+                    "state": "idle in transaction",
+                    "query": "UPDATE orders SET ...",
+                    "wait_event_type": "Lock",
+                    "backend_start": "2026-02-21 09:30:00",
+                },
             ],
             "pg_stat_database": [
                 {
-                    "datname": "databricks_postgres", "numbackends": 15, "xact_commit": 500000,
-                    "xact_rollback": 50, "blks_read": 100000, "blks_hit": 9900000,
-                    "deadlocks": 1, "temp_files": 10, "temp_bytes": 1048576,
+                    "datname": "databricks_postgres",
+                    "numbackends": 15,
+                    "xact_commit": 500000,
+                    "xact_rollback": 50,
+                    "blks_read": 100000,
+                    "blks_hit": 9900000,
+                    "deadlocks": 1,
+                    "temp_files": 10,
+                    "temp_bytes": 1048576,
                     "datfrozenxid_age": 300000000,
                 },
             ],
@@ -555,52 +647,154 @@ class MockConnection:
             ],
             "pg_stat_io": [
                 {
-                    "backend_type": "client backend", "object": "relation", "context": "normal",
-                    "reads": 150000, "read_time": 4500.0, "writes": 80000, "write_time": 2400.0,
-                    "hits": 9800000, "evictions": 5000, "fsyncs": 200, "fsync_time": 150.0,
+                    "backend_type": "client backend",
+                    "object": "relation",
+                    "context": "normal",
+                    "reads": 150000,
+                    "read_time": 4500.0,
+                    "writes": 80000,
+                    "write_time": 2400.0,
+                    "hits": 9800000,
+                    "evictions": 5000,
+                    "fsyncs": 200,
+                    "fsync_time": 150.0,
                 },
                 {
-                    "backend_type": "autovacuum worker", "object": "relation", "context": "vacuum",
-                    "reads": 50000, "read_time": 1200.0, "writes": 30000, "write_time": 900.0,
-                    "hits": 2000000, "evictions": 1000, "fsyncs": 50, "fsync_time": 30.0,
+                    "backend_type": "autovacuum worker",
+                    "object": "relation",
+                    "context": "vacuum",
+                    "reads": 50000,
+                    "read_time": 1200.0,
+                    "writes": 30000,
+                    "write_time": 900.0,
+                    "hits": 2000000,
+                    "evictions": 1000,
+                    "fsyncs": 50,
+                    "fsync_time": 30.0,
                 },
             ],
             "pg_stat_wal": [
                 {
-                    "wal_records": 12500000, "wal_fpi": 125000, "wal_bytes": 6400000000,
-                    "wal_buffers_full": 50, "wal_write": 500000, "wal_sync": 450000,
-                    "wal_write_time": 12000.0, "wal_sync_time": 8000.0, "stats_reset": "2026-02-01 00:00:00",
+                    "wal_records": 12500000,
+                    "wal_fpi": 125000,
+                    "wal_bytes": 6400000000,
+                    "wal_buffers_full": 50,
+                    "wal_write": 500000,
+                    "wal_sync": 450000,
+                    "wal_write_time": 12000.0,
+                    "wal_sync_time": 8000.0,
+                    "stats_reset": "2026-02-01 00:00:00",
                 },
             ],
             "pg_stat_checkpointer": [
                 {
-                    "num_timed": 120, "num_requested": 5, "write_time": 45000.0,
-                    "sync_time": 12000.0, "buffers_written": 500000, "stats_reset": "2026-02-01 00:00:00",
+                    "num_timed": 120,
+                    "num_requested": 5,
+                    "write_time": 45000.0,
+                    "sync_time": 12000.0,
+                    "buffers_written": 500000,
+                    "stats_reset": "2026-02-01 00:00:00",
                 },
             ],
             "pg_catalog.pg_class": [
-                {"table_name": "orders", "column_name": "id", "data_type": "integer", "ordinal_position": 1, "not_null": True, "column_default": "nextval('orders_id_seq'::regclass)"},
-                {"table_name": "orders", "column_name": "customer_id", "data_type": "integer", "ordinal_position": 2, "not_null": True, "column_default": None},
-                {"table_name": "orders", "column_name": "product_id", "data_type": "integer", "ordinal_position": 3, "not_null": True, "column_default": None},
-                {"table_name": "orders", "column_name": "status", "data_type": "character varying(50)", "ordinal_position": 4, "not_null": False, "column_default": "'pending'::character varying"},
-                {"table_name": "orders", "column_name": "created_at", "data_type": "timestamp with time zone", "ordinal_position": 5, "not_null": False, "column_default": "now()"},
-                {"table_name": "events", "column_name": "id", "data_type": "integer", "ordinal_position": 1, "not_null": True, "column_default": "nextval('events_id_seq'::regclass)"},
-                {"table_name": "events", "column_name": "type", "data_type": "character varying(100)", "ordinal_position": 2, "not_null": True, "column_default": None},
-                {"table_name": "events", "column_name": "data", "data_type": "jsonb", "ordinal_position": 3, "not_null": False, "column_default": None},
-                {"table_name": "users", "column_name": "id", "data_type": "integer", "ordinal_position": 1, "not_null": True, "column_default": "nextval('users_id_seq'::regclass)"},
-                {"table_name": "users", "column_name": "email", "data_type": "character varying(255)", "ordinal_position": 2, "not_null": True, "column_default": None},
+                {
+                    "table_name": "orders",
+                    "column_name": "id",
+                    "data_type": "integer",
+                    "ordinal_position": 1,
+                    "not_null": True,
+                    "column_default": "nextval('orders_id_seq'::regclass)",
+                },
+                {
+                    "table_name": "orders",
+                    "column_name": "customer_id",
+                    "data_type": "integer",
+                    "ordinal_position": 2,
+                    "not_null": True,
+                    "column_default": None,
+                },
+                {
+                    "table_name": "orders",
+                    "column_name": "product_id",
+                    "data_type": "integer",
+                    "ordinal_position": 3,
+                    "not_null": True,
+                    "column_default": None,
+                },
+                {
+                    "table_name": "orders",
+                    "column_name": "status",
+                    "data_type": "character varying(50)",
+                    "ordinal_position": 4,
+                    "not_null": False,
+                    "column_default": "'pending'::character varying",
+                },
+                {
+                    "table_name": "orders",
+                    "column_name": "created_at",
+                    "data_type": "timestamp with time zone",
+                    "ordinal_position": 5,
+                    "not_null": False,
+                    "column_default": "now()",
+                },
+                {
+                    "table_name": "events",
+                    "column_name": "id",
+                    "data_type": "integer",
+                    "ordinal_position": 1,
+                    "not_null": True,
+                    "column_default": "nextval('events_id_seq'::regclass)",
+                },
+                {
+                    "table_name": "events",
+                    "column_name": "type",
+                    "data_type": "character varying(100)",
+                    "ordinal_position": 2,
+                    "not_null": True,
+                    "column_default": None,
+                },
+                {
+                    "table_name": "events",
+                    "column_name": "data",
+                    "data_type": "jsonb",
+                    "ordinal_position": 3,
+                    "not_null": False,
+                    "column_default": None,
+                },
+                {
+                    "table_name": "users",
+                    "column_name": "id",
+                    "data_type": "integer",
+                    "ordinal_position": 1,
+                    "not_null": True,
+                    "column_default": "nextval('users_id_seq'::regclass)",
+                },
+                {
+                    "table_name": "users",
+                    "column_name": "email",
+                    "data_type": "character varying(255)",
+                    "ordinal_position": 2,
+                    "not_null": True,
+                    "column_default": None,
+                },
             ],
             "pg_catalog.pg_index": [
                 {
-                    "table_name": "orders", "index_a": "idx_orders_customer_id", "index_b": "idx_orders_cust_id_v2",
-                    "columns_a": "customer_id", "columns_b": "customer_id",
-                    "size_a": 104857600, "size_b": 104857600,
+                    "table_name": "orders",
+                    "index_a": "idx_orders_customer_id",
+                    "index_b": "idx_orders_cust_id_v2",
+                    "columns_a": "customer_id",
+                    "columns_b": "customer_id",
+                    "size_a": 104857600,
+                    "size_b": 104857600,
                 },
             ],
             "pg_catalog.pg_constraint": [
                 {
-                    "table_name": "orders", "conname": "fk_orders_customer",
-                    "column_name": "customer_id", "referenced_table": "users",
+                    "table_name": "orders",
+                    "conname": "fk_orders_customer",
+                    "column_name": "customer_id",
+                    "referenced_table": "users",
                     "has_index": False,
                 },
             ],

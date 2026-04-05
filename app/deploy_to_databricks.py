@@ -41,33 +41,40 @@ def main():
 
     create = run(["databricks", "apps", "create", app_name, "--profile", profile])
     if create.returncode != 0 and "already exists" not in create.stderr:
-        print(f"  App may already exist, continuing...")
+        print("  App may already exist, continuing...")
 
     # Step 3: Upload source
-    print(f"\n[3/4] Uploading app source...")
-    result = run([
-        "databricks", "apps", "deploy", app_name,
-        "--source-code-path", str(APP_DIR),
-        "--profile", profile,
-    ])
+    print("\n[3/4] Uploading app source...")
+    result = run(
+        [
+            "databricks",
+            "apps",
+            "deploy",
+            app_name,
+            "--source-code-path",
+            str(APP_DIR),
+            "--profile",
+            profile,
+        ]
+    )
     if result.returncode != 0:
         print(f"Deploy failed: {result.stderr}")
         sys.exit(1)
     print(f"  Deploy initiated: {result.stdout.strip()}")
 
     # Step 4: Wait for deployment
-    print(f"\n[4/4] Waiting for deployment...")
+    print("\n[4/4] Waiting for deployment...")
     for i in range(30):
         time.sleep(10)
         status = run(["databricks", "apps", "get", app_name, "--profile", profile])
         if "RUNNING" in status.stdout:
-            print(f"\n  App is RUNNING!")
+            print("\n  App is RUNNING!")
             # Extract URL
             for line in status.stdout.splitlines():
                 if "url" in line.lower():
                     print(f"  {line.strip()}")
             break
-        print(f"  Waiting... ({(i+1)*10}s)")
+        print(f"  Waiting... ({(i + 1) * 10}s)")
     else:
         print("  Timeout — check app status manually")
 

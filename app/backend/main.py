@@ -7,9 +7,8 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -56,6 +55,7 @@ class DatabricksProxyAuthMiddleware(BaseHTTPMiddleware):
         request.state.email = forwarded_email
         return await call_next(request)
 
+
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 logger.info(f"main.py loaded, STATIC_DIR={STATIC_DIR}, exists={STATIC_DIR.exists()}")
 logger.info(f"CWD={os.getcwd()}, __file__={__file__}")
@@ -90,6 +90,7 @@ app.add_middleware(
 # Auth middleware — validates Databricks Apps proxy headers
 app.add_middleware(DatabricksProxyAuthMiddleware)
 
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Catch unhandled exceptions and return a safe error response."""
@@ -99,7 +100,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # Register API routers
 try:
-    from .routers import health, agents, metrics, performance, indexes, operations, lakebase, jobs, assessment
+    from .routers import agents, assessment, health, indexes, jobs, lakebase, metrics, operations, performance
 
     app.include_router(health.router)
     app.include_router(agents.router)

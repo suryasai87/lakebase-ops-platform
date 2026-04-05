@@ -19,17 +19,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 import os
+import sys
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from agents import HealthAgent, PerformanceAgent, ProvisioningAgent
 from framework.agent_framework import AgentFramework, EventType
-from agents import ProvisioningAgent, PerformanceAgent, HealthAgent
-from utils.lakebase_client import LakebaseClient
+from utils.alerting import AlertChannel, AlertManager
 from utils.delta_writer import DeltaWriter
-from utils.alerting import AlertManager, AlertChannel
+from utils.lakebase_client import LakebaseClient
 
 # Configure logging
 logging.basicConfig(
@@ -57,6 +57,7 @@ async def run_full_platform_simulation():
     logger.info("Initializing shared infrastructure...")
 
     from config.settings import WORKSPACE_HOST
+
     lakebase_client = LakebaseClient(
         workspace_host=WORKSPACE_HOST or "localhost",
         mock_mode=True,
@@ -93,24 +94,27 @@ async def run_full_platform_simulation():
 
     # When provisioning completes, Health Agent starts monitoring
     def on_provisioning_complete(event):
-        logger.info(f"[EVENT] Provisioning complete for {event.data.get('project_id')} "
-                     f"-> Health Agent will begin monitoring branches: {event.data.get('branches')}")
+        logger.info(
+            f"[EVENT] Provisioning complete for {event.data.get('project_id')} "
+            f"-> Health Agent will begin monitoring branches: {event.data.get('branches')}"
+        )
 
     # When thresholds are breached, Performance Agent may need to act
     def on_threshold_breached(event):
         metric = event.data.get("metric", "")
         if "dead_tuple" in metric:
-            logger.info(f"[EVENT] Dead tuple threshold breached -> Performance Agent will schedule vacuum")
+            logger.info("[EVENT] Dead tuple threshold breached -> Performance Agent will schedule vacuum")
 
     # When vacuum completes, Health Agent updates its metrics
     def on_vacuum_completed(event):
-        logger.info(f"[EVENT] Vacuum completed on {event.data.get('tables_vacuumed', 0)} tables "
-                     f"-> Health Agent will refresh metrics")
+        logger.info(
+            f"[EVENT] Vacuum completed on {event.data.get('tables_vacuumed', 0)} tables "
+            f"-> Health Agent will refresh metrics"
+        )
 
     # When index recommendations are generated, log for review
     def on_index_recommendation(event):
-        logger.info(f"[EVENT] {event.data.get('total_issues', 0)} index issues detected "
-                     f"-> Added to review queue")
+        logger.info(f"[EVENT] {event.data.get('total_issues', 0)} index issues detected -> Added to review queue")
 
     framework.subscribe(EventType.PROVISIONING_COMPLETE, on_provisioning_complete)
     framework.subscribe(EventType.THRESHOLD_BREACHED, on_threshold_breached)
@@ -167,7 +171,7 @@ async def run_full_platform_simulation():
 
     # Alert summary
     alert_summary = alert_manager.get_alert_summary()
-    print(f"\n  Alert Summary:")
+    print("\n  Alert Summary:")
     print(f"    Total Alerts: {alert_summary['total_alerts']}")
     for severity, count in alert_summary["by_severity"].items():
         if count > 0:
@@ -176,7 +180,7 @@ async def run_full_platform_simulation():
 
     # Delta write summary
     write_log = delta_writer.get_write_log()
-    print(f"\n  Delta Lake Writes:")
+    print("\n  Delta Lake Writes:")
     print(f"    Total Write Operations: {len(write_log)}")
     total_records = sum(w.get("records", 0) for w in write_log)
     print(f"    Total Records Written: {total_records}")
@@ -201,15 +205,13 @@ async def run_full_platform_simulation():
         project_id="supply-chain-prod",
         branch_id="production",
     )
-    print(f"    Q: Why is my orders query slow?")
+    print("    Q: Why is my orders query slow?")
     print(f"    A: {nl_result.get('analysis', '')}")
     print(f"    Fix: {nl_result.get('recommendation', '')}")
 
     # Demo: AI Query Optimization
     print("\n  --- UC-12: AI Query Optimization ---")
-    ai_result = performance_agent.analyze_slow_queries_with_ai(
-        "supply-chain-prod", "production"
-    )
+    ai_result = performance_agent.analyze_slow_queries_with_ai("supply-chain-prod", "production")
     print(f"    Slow queries analyzed: {ai_result['slow_queries_analyzed']}")
     if ai_result.get("analyses"):
         first = ai_result["analyses"][0]
@@ -227,10 +229,12 @@ async def run_full_platform_simulation():
 
     # Demo: Self-Healing
     print("\n  --- UC-13: Self-Healing ---")
-    diagnosis = health_agent.diagnose_root_cause({
-        "metric": "dead_tuple_ratio",
-        "value": 0.35,
-    })
+    diagnosis = health_agent.diagnose_root_cause(
+        {
+            "metric": "dead_tuple_ratio",
+            "value": 0.35,
+        }
+    )
     print(f"    Anomaly: {diagnosis['anomaly']}")
     print(f"    Auto-fixable: {diagnosis['auto_fixable']}")
     print(f"    Causes: {diagnosis['probable_causes'][:2]}")
@@ -251,7 +255,7 @@ async def run_full_platform_simulation():
     print("=" * 80)
 
     cicd = provisioning_agent.setup_cicd_pipeline("supply-chain-prod")
-    print(f"\n  GitHub Actions workflows generated for project: supply-chain-prod")
+    print("\n  GitHub Actions workflows generated for project: supply-chain-prod")
     print(f"  Secrets required: {cicd['secrets_required']}")
     print(f"  Variables required: {cicd['variables_required']}")
 
@@ -287,9 +291,11 @@ async def run_full_platform_simulation():
 
     print("\n" + "=" * 80)
     print("  SIMULATION COMPLETE")
-    print(f"  All 16 weeks of PRD implementation demonstrated successfully.")
-    print(f"  3 Agents | {sum(len(a.tools) for a in framework.agents.values())} Tools | "
-          f"{results['events']} Events | {total_records} Records Written")
+    print("  All 16 weeks of PRD implementation demonstrated successfully.")
+    print(
+        f"  3 Agents | {sum(len(a.tools) for a in framework.agents.values())} Tools | "
+        f"{results['events']} Events | {total_records} Records Written"
+    )
     print("=" * 80 + "\n")
 
     # Cleanup

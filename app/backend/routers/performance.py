@@ -1,14 +1,14 @@
 """Performance router — slow queries and regression detection."""
 
-from typing import List
 from fastapi import APIRouter, Query
-from ..models.performance import SlowQuery, RegressionEntry
+
+from ..models.performance import RegressionEntry, SlowQuery
 from ..services.sql_service import execute_query, fqn, get_cached
 
 router = APIRouter(prefix="/api/performance", tags=["performance"])
 
 
-@router.get("/queries", operation_id="slow_queries", response_model=List[SlowQuery])
+@router.get("/queries", operation_id="slow_queries", response_model=list[SlowQuery])
 def slow_queries(
     hours: int = Query(24, ge=1, le=168),
     limit: int = Query(10, ge=1, le=50),
@@ -26,33 +26,38 @@ def slow_queries(
                SUM(rows) AS total_rows,
                ROUND(SUM(shared_blks_read) * 8.0 / 1024, 2) AS total_read_mb,
                MAX(snapshot_timestamp) AS last_seen
-        FROM {fqn('pg_stat_history')}
+        FROM {fqn("pg_stat_history")}
         WHERE snapshot_timestamp > CURRENT_TIMESTAMP - INTERVAL :hours HOURS
         GROUP BY query, queryid
         ORDER BY total_time_ms DESC
         LIMIT :row_limit
         """
-        return execute_query(sql, parameters=[
-            {"name": "hours", "value": safe_hours, "type": "INT"},
-            {"name": "row_limit", "value": safe_limit, "type": "INT"},
-        ])
+        return execute_query(
+            sql,
+            parameters=[
+                {"name": "hours", "value": safe_hours, "type": "INT"},
+                {"name": "row_limit", "value": safe_limit, "type": "INT"},
+            ],
+        )
+
     return get_cached(f"slow_queries_{safe_hours}_{safe_limit}", fetch, ttl=60)
 
 
-@router.get("/regressions", operation_id="performance_regressions", response_model=List[RegressionEntry])
+@router.get("/regressions", operation_id="performance_regressions", response_model=list[RegressionEntry])
 def regressions():
     """Detect query performance regressions (last 2h vs previous day)."""
+
     def fetch():
         sql = f"""
         WITH recent AS (
             SELECT queryid, AVG(mean_exec_time) AS recent_avg
-            FROM {fqn('pg_stat_history')}
+            FROM {fqn("pg_stat_history")}
             WHERE snapshot_timestamp > CURRENT_TIMESTAMP - INTERVAL 2 HOURS
             GROUP BY queryid
         ),
         baseline AS (
             SELECT queryid, AVG(mean_exec_time) AS baseline_avg
-            FROM {fqn('pg_stat_history')}
+            FROM {fqn("pg_stat_history")}
             WHERE snapshot_timestamp BETWEEN CURRENT_TIMESTAMP - INTERVAL 25 HOURS
                                             AND CURRENT_TIMESTAMP - INTERVAL 1 HOUR
             GROUP BY queryid
@@ -73,4 +78,5 @@ def regressions():
         LIMIT 20
         """
         return execute_query(sql)
+
     return get_cached("regressions", fetch, ttl=60)

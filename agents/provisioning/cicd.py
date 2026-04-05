@@ -15,8 +15,7 @@ logger = logging.getLogger("lakebase_ops.provisioning")
 class CICDMixin:
     """Mixin providing CI/CD pipeline generation."""
 
-    def setup_cicd_pipeline(self, project_id: str, repo_owner: str = "org",
-                            repo_name: str = "app") -> dict:
+    def setup_cicd_pipeline(self, project_id: str, repo_owner: str = "org", repo_name: str = "app") -> dict:
         """
         Generate GitHub Actions YAML for branch automation.
         Tasks 26-32 + PRD FR-06.

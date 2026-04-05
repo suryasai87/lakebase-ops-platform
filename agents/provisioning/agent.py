@@ -21,17 +21,19 @@ import logging
 
 from framework.agent_framework import BaseAgent, TaskResult
 
-from .project import ProjectMixin
+from .assessment import AssessmentMixin
 from .branching import BranchingMixin
-from .migration import MigrationMixin
 from .cicd import CICDMixin
 from .governance import GovernanceMixin
-from .assessment import AssessmentMixin
+from .migration import MigrationMixin
+from .project import ProjectMixin
 
 logger = logging.getLogger("lakebase_ops.provisioning")
 
 
-class ProvisioningAgent(ProjectMixin, BranchingMixin, MigrationMixin, CICDMixin, GovernanceMixin, AssessmentMixin, BaseAgent):
+class ProvisioningAgent(
+    ProjectMixin, BranchingMixin, MigrationMixin, CICDMixin, GovernanceMixin, AssessmentMixin, BaseAgent
+):
     """
     Provisioning & DevOps Agent — manages Day 0/Day 1 operations.
 
@@ -52,90 +54,150 @@ class ProvisioningAgent(ProjectMixin, BranchingMixin, MigrationMixin, CICDMixin,
         """Register all provisioning tools (59 setup tasks + PRD FR-06/FR-08)."""
 
         # Project Setup (Tasks 1-4)
-        self.register_tool("provision_lakebase_project", self.provision_lakebase_project,
-                           "Create a new Lakebase project with full branch hierarchy")
-        self.register_tool("create_ops_catalog", self.create_ops_catalog,
-                           "Create ops_catalog and all operational Delta tables (PRD Phase 1.1)")
+        self.register_tool(
+            "provision_lakebase_project",
+            self.provision_lakebase_project,
+            "Create a new Lakebase project with full branch hierarchy",
+        )
+        self.register_tool(
+            "create_ops_catalog",
+            self.create_ops_catalog,
+            "Create ops_catalog and all operational Delta tables (PRD Phase 1.1)",
+        )
 
         # Branch Management (Tasks 5-15, 16-21, 37-43)
-        self.register_tool("create_branch", self.create_branch,
-                           "Create a branch with naming conventions and TTL")
-        self.register_tool("protect_branch", self.protect_branch,
-                           "Mark a branch as protected", risk_level="medium")
-        self.register_tool("enforce_ttl_policies", self.enforce_ttl_policies,
-                           "Scan and delete branches exceeding TTL", schedule="0 */6 * * *")
-        self.register_tool("monitor_branch_count", self.monitor_branch_count,
-                           "Alert on branch count approaching limit", schedule="0 */6 * * *")
-        self.register_tool("reset_branch_from_parent", self.reset_branch_from_parent,
-                           "Sync branch from parent (nightly staging reset)", schedule="0 2 * * *")
+        self.register_tool("create_branch", self.create_branch, "Create a branch with naming conventions and TTL")
+        self.register_tool("protect_branch", self.protect_branch, "Mark a branch as protected", risk_level="medium")
+        self.register_tool(
+            "enforce_ttl_policies",
+            self.enforce_ttl_policies,
+            "Scan and delete branches exceeding TTL",
+            schedule="0 */6 * * *",
+        )
+        self.register_tool(
+            "monitor_branch_count",
+            self.monitor_branch_count,
+            "Alert on branch count approaching limit",
+            schedule="0 */6 * * *",
+        )
+        self.register_tool(
+            "reset_branch_from_parent",
+            self.reset_branch_from_parent,
+            "Sync branch from parent (nightly staging reset)",
+            schedule="0 2 * * *",
+        )
 
         # Git Hook Integration (GAP-037)
-        self.register_tool("create_branch_from_git_hook", self.create_branch_from_git_hook,
-                           "Create Lakebase branch from Git post-checkout hook")
-        self.register_tool("manage_pr_branch_lifecycle", self.manage_pr_branch_lifecycle,
-                           "Unified PR branch lifecycle (open/sync/close/merge)")
+        self.register_tool(
+            "create_branch_from_git_hook",
+            self.create_branch_from_git_hook,
+            "Create Lakebase branch from Git post-checkout hook",
+        )
+        self.register_tool(
+            "manage_pr_branch_lifecycle",
+            self.manage_pr_branch_lifecycle,
+            "Unified PR branch lifecycle (open/sync/close/merge)",
+        )
 
         # QA Branch Workflow (GAP-039)
-        self.register_tool("create_qa_branch", self.create_qa_branch,
-                           "Create a QA validation branch for a release candidate")
-        self.register_tool("reset_branch_to_parent", self.reset_branch_to_parent,
-                           "Reset any branch back to its parent state")
+        self.register_tool(
+            "create_qa_branch", self.create_qa_branch, "Create a QA validation branch for a release candidate"
+        )
+        self.register_tool(
+            "reset_branch_to_parent", self.reset_branch_to_parent, "Reset any branch back to its parent state"
+        )
 
         # Read Replicas & HA (GAP-041)
-        self.register_tool("manage_read_replicas", self.manage_read_replicas,
-                           "Manage read replicas (list/add/remove/scale) for a branch")
-        self.register_tool("configure_ha", self.configure_ha,
-                           "Enable or disable high availability with AZ failover",
-                           risk_level="medium")
+        self.register_tool(
+            "manage_read_replicas",
+            self.manage_read_replicas,
+            "Manage read replicas (list/add/remove/scale) for a branch",
+        )
+        self.register_tool(
+            "configure_ha",
+            self.configure_ha,
+            "Enable or disable high availability with AZ failover",
+            risk_level="medium",
+        )
 
         # Schema Migration (Tasks 22-25)
-        self.register_tool("apply_schema_migration", self.apply_schema_migration,
-                           "Apply idempotent DDL migrations to a branch", risk_level="medium")
-        self.register_tool("capture_schema_diff", self.capture_schema_diff,
-                           "Generate schema diff between branches")
-        self.register_tool("test_migration_on_branch", self.test_migration_on_branch,
-                           "Full 9-step migration testing workflow (PRD FR-08)")
+        self.register_tool(
+            "apply_schema_migration",
+            self.apply_schema_migration,
+            "Apply idempotent DDL migrations to a branch",
+            risk_level="medium",
+        )
+        self.register_tool("capture_schema_diff", self.capture_schema_diff, "Generate schema diff between branches")
+        self.register_tool(
+            "test_migration_on_branch",
+            self.test_migration_on_branch,
+            "Full 9-step migration testing workflow (PRD FR-08)",
+        )
 
         # CI/CD (Tasks 26-32)
-        self.register_tool("setup_cicd_pipeline", self.setup_cicd_pipeline,
-                           "Generate GitHub Actions YAML for branch automation")
-        self.register_tool("create_branch_on_pr", self.create_branch_on_pr,
-                           "Create ephemeral branch when PR opened (FR-06)")
-        self.register_tool("delete_branch_on_pr_close", self.delete_branch_on_pr_close,
-                           "Delete branch when PR closed/merged (FR-06)")
+        self.register_tool(
+            "setup_cicd_pipeline", self.setup_cicd_pipeline, "Generate GitHub Actions YAML for branch automation"
+        )
+        self.register_tool(
+            "create_branch_on_pr", self.create_branch_on_pr, "Create ephemeral branch when PR opened (FR-06)"
+        )
+        self.register_tool(
+            "delete_branch_on_pr_close", self.delete_branch_on_pr_close, "Delete branch when PR closed/merged (FR-06)"
+        )
 
         # RLS (Tasks 33-36)
-        self.register_tool("configure_rls", self.configure_rls,
-                           "Setup row-level security for multi-tenant isolation", risk_level="high",
-                           requires_approval=True)
+        self.register_tool(
+            "configure_rls",
+            self.configure_rls,
+            "Setup row-level security for multi-tenant isolation",
+            risk_level="high",
+            requires_approval=True,
+        )
 
         # Unity Catalog Integration (Tasks 50-54)
-        self.register_tool("setup_unity_catalog_integration", self.setup_unity_catalog_integration,
-                           "Align Lakebase with UC governance framework")
+        self.register_tool(
+            "setup_unity_catalog_integration",
+            self.setup_unity_catalog_integration,
+            "Align Lakebase with UC governance framework",
+        )
 
         # AI Agent Integration (Tasks 55-57)
-        self.register_tool("setup_ai_agent_branching", self.setup_ai_agent_branching,
-                           "Configure AI agent branching instructions")
+        self.register_tool(
+            "setup_ai_agent_branching", self.setup_ai_agent_branching, "Configure AI agent branching instructions"
+        )
 
         # Full Provisioning Workflow
-        self.register_tool("provision_with_governance", self.provision_with_governance,
-                           "Full project setup with all governance and integrations")
+        self.register_tool(
+            "provision_with_governance",
+            self.provision_with_governance,
+            "Full project setup with all governance and integrations",
+        )
 
         # Migration Assessment
-        self.register_tool("connect_and_discover", self.connect_and_discover,
-                           "Connect read-only to source Postgres and discover schema/extensions/functions")
-        self.register_tool("profile_workload", self.profile_workload,
-                           "Profile workload patterns from pg_stat_statements and pg_stat_activity")
-        self.register_tool("assess_readiness", self.assess_readiness,
-                           "Compute Lakebase readiness score with blocker detection")
-        self.register_tool("generate_migration_blueprint", self.generate_migration_blueprint,
-                           "Generate 4-phase migration plan with commands and timeline")
+        self.register_tool(
+            "connect_and_discover",
+            self.connect_and_discover,
+            "Connect read-only to source Postgres and discover schema/extensions/functions",
+        )
+        self.register_tool(
+            "profile_workload",
+            self.profile_workload,
+            "Profile workload patterns from pg_stat_statements and pg_stat_activity",
+        )
+        self.register_tool(
+            "assess_readiness", self.assess_readiness, "Compute Lakebase readiness score with blocker detection"
+        )
+        self.register_tool(
+            "generate_migration_blueprint",
+            self.generate_migration_blueprint,
+            "Generate 4-phase migration plan with commands and timeline",
+        )
 
     # -----------------------------------------------------------------------
     # Automation Cycle
     # -----------------------------------------------------------------------
 
-    async def run_cycle(self, context: dict = None) -> list[TaskResult]:
+    async def run_cycle(self, context: dict | None = None) -> list[TaskResult]:
         """Execute one full provisioning automation cycle."""
         ctx = context or {}
         results = []
@@ -165,9 +227,7 @@ class ProvisioningAgent(ProjectMixin, BranchingMixin, MigrationMixin, CICDMixin,
         pending_prs = ctx.get("pending_prs", [])
         for pr in pending_prs:
             if pr.get("action") == "opened":
-                result = await self.execute_tool(
-                    "create_branch_on_pr", project_id=project_id, pr_number=pr["number"]
-                )
+                result = await self.execute_tool("create_branch_on_pr", project_id=project_id, pr_number=pr["number"])
                 results.append(result)
             elif pr.get("action") == "closed":
                 result = await self.execute_tool(

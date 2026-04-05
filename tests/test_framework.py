@@ -1,23 +1,20 @@
 """Tests for AgentFramework: event bus, subscribe/dispatch, tool registration, cycle orchestration."""
 
-import asyncio
-
 import pytest
 
 from framework.agent_framework import (
-    AgentFramework,
+    AgentTool,
     BaseAgent,
+    Event,
+    EventType,
     TaskResult,
     TaskStatus,
-    EventType,
-    Event,
-    AgentTool,
 )
-
 
 # ---------------------------------------------------------------------------
 # Minimal concrete agent for testing
 # ---------------------------------------------------------------------------
+
 
 class _StubAgent(BaseAgent):
     """Minimal agent that registers a single echo tool."""
@@ -28,12 +25,8 @@ class _StubAgent(BaseAgent):
 
     def register_tools(self) -> None:
         self.register_tool("echo", self._echo, description="return input")
-        self.register_tool(
-            "fail", self._fail, description="always fails", risk_level="high"
-        )
-        self.register_tool(
-            "approval", self._echo, description="needs approval", requires_approval=True
-        )
+        self.register_tool("fail", self._fail, description="always fails", risk_level="high")
+        self.register_tool("approval", self._echo, description="needs approval", requires_approval=True)
 
     @staticmethod
     def _echo(**kwargs) -> dict:
@@ -52,6 +45,7 @@ class _StubAgent(BaseAgent):
 # ---------------------------------------------------------------------------
 # BaseAgent basics
 # ---------------------------------------------------------------------------
+
 
 class TestBaseAgent:
     def test_register_tool_adds_to_dict(self):
@@ -121,6 +115,7 @@ class TestBaseAgent:
 # Event bus: subscribe / dispatch
 # ---------------------------------------------------------------------------
 
+
 class TestEventBus:
     def test_subscribe_and_dispatch(self, framework):
         received = []
@@ -180,6 +175,7 @@ class TestEventBus:
 # Agent registration
 # ---------------------------------------------------------------------------
 
+
 class TestAgentRegistration:
     def test_register_agent(self, framework):
         agent = _StubAgent()
@@ -201,6 +197,7 @@ class TestAgentRegistration:
 # Shared state
 # ---------------------------------------------------------------------------
 
+
 class TestSharedState:
     def test_get_set(self, framework):
         framework.set_shared_state("key1", [1, 2, 3])
@@ -217,6 +214,7 @@ class TestSharedState:
 # ---------------------------------------------------------------------------
 # Full cycle orchestration
 # ---------------------------------------------------------------------------
+
 
 class TestFullCycle:
     @pytest.mark.asyncio
@@ -253,6 +251,7 @@ class TestFullCycle:
 # ---------------------------------------------------------------------------
 # TaskResult
 # ---------------------------------------------------------------------------
+
 
 class TestTaskResult:
     def test_str_representation(self):

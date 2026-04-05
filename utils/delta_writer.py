@@ -15,12 +15,15 @@ import json
 import logging
 import subprocess
 import time
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
 
 from config.settings import (
-    DELTA_TABLES, OPS_CATALOG, OPS_SCHEMA, ARCHIVE_SCHEMA,
-    WORKSPACE_HOST, SQL_WAREHOUSE_ID,
+    ARCHIVE_SCHEMA,
+    DELTA_TABLES,
+    OPS_CATALOG,
+    OPS_SCHEMA,
+    SQL_WAREHOUSE_ID,
+    WORKSPACE_HOST,
 )
 
 logger = logging.getLogger("lakebase_ops.delta_writer")
@@ -35,20 +38,22 @@ class DeltaWriter:
     - Otherwise: Uses PySpark to write to Unity Catalog tables
     """
 
-    def __init__(self, mock_mode: bool = True, sql_api_mode: bool = False,
-                 warehouse_id: str = "", workspace_host: str = ""):
+    def __init__(
+        self, mock_mode: bool = True, sql_api_mode: bool = False, warehouse_id: str = "", workspace_host: str = ""
+    ):
         self.mock_mode = mock_mode
         self.sql_api_mode = sql_api_mode and not mock_mode
         self.warehouse_id = warehouse_id or SQL_WAREHOUSE_ID
         self.workspace_host = workspace_host or WORKSPACE_HOST
         self._spark = None
         self._write_log: list[dict] = []
-        self._db_token: Optional[str] = None
+        self._db_token: str | None = None
         self._token_time: float = 0
 
         if not mock_mode and not sql_api_mode:
             try:
                 from pyspark.sql import SparkSession
+
                 self._spark = SparkSession.builder.getOrCreate()
             except ImportError:
                 logger.warning("PySpark not available, trying SQL API mode")
@@ -62,6 +67,7 @@ class DeltaWriter:
         # Method 1: Databricks SDK (works in Apps and notebooks)
         try:
             from databricks.sdk import WorkspaceClient
+
             client = WorkspaceClient()
             token = getattr(client.config, "token", None)
             if not token:
@@ -78,9 +84,10 @@ class DeltaWriter:
         # Method 2: CLI fallback (local development)
         try:
             result = subprocess.run(
-                ["databricks", "auth", "token", "--profile", "DEFAULT",
-                 "--host", f"https://{self.workspace_host}"],
-                capture_output=True, text=True, timeout=30,
+                ["databricks", "auth", "token", "--profile", "DEFAULT", "--host", f"https://{self.workspace_host}"],
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             if result.returncode == 0:
                 data = json.loads(result.stdout)
@@ -94,6 +101,7 @@ class DeltaWriter:
     def _sql_execute(self, statement: str, wait_timeout: str = "30s") -> dict:
         """Execute SQL via Statement Execution API."""
         import requests
+
         token = self._get_token()
         url = f"https://{self.workspace_host}/api/2.0/sql/statements"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -124,6 +132,7 @@ class DeltaWriter:
 
         # Poll for completion
         import requests
+
         token = self._get_token()
         url = f"https://{self.workspace_host}/api/2.0/sql/statements/{statement_id}"
         headers = {"Authorization": f"Bearer {token}"}
@@ -284,9 +293,9 @@ class DeltaWriter:
         if self.mock_mode:
             for stmt in ddl_statements:
                 logger.info(f"[MOCK DDL] {stmt}")
-            for table_name, ddl in table_definitions.items():
+            for _table_name, ddl in table_definitions.items():
                 formatted = ddl.format(catalog=OPS_CATALOG, schema=OPS_SCHEMA)
-                logger.info(f"[MOCK DDL] Creating table: {OPS_CATALOG}.{OPS_SCHEMA}.{table_name}")
+                logger.info(f"[MOCK DDL] Creating table: {OPS_CATALOG}.{OPS_SCHEMA}.{_table_name}")
             return {
                 "catalog": OPS_CATALOG,
                 "schemas": [OPS_SCHEMA, ARCHIVE_SCHEMA],
@@ -301,12 +310,12 @@ class DeltaWriter:
                 r = self._sql_execute_and_wait(stmt)
                 state = r.get("status", {}).get("state", "UNKNOWN")
                 results.append({"statement": stmt[:80], "state": state})
-            for table_name, ddl in table_definitions.items():
+            for _table_name, ddl in table_definitions.items():
                 formatted = ddl.format(catalog=OPS_CATALOG, schema=OPS_SCHEMA)
-                logger.info(f"[SQL API] Creating table: {OPS_CATALOG}.{OPS_SCHEMA}.{table_name}")
+                logger.info(f"[SQL API] Creating table: {OPS_CATALOG}.{OPS_SCHEMA}.{_table_name}")
                 r = self._sql_execute_and_wait(formatted)
                 state = r.get("status", {}).get("state", "UNKNOWN")
-                results.append({"table": table_name, "state": state})
+                results.append({"table": _table_name, "state": state})
             succeeded = sum(1 for r in results if r.get("state") == "SUCCEEDED")
             return {
                 "catalog": OPS_CATALOG,
@@ -318,7 +327,7 @@ class DeltaWriter:
 
         for stmt in ddl_statements:
             self._spark.sql(stmt)
-        for table_name, ddl in table_definitions.items():
+        for _table_name, ddl in table_definitions.items():
             self._spark.sql(ddl.format(catalog=OPS_CATALOG, schema=OPS_SCHEMA))
         return {
             "catalog": OPS_CATALOG,
@@ -330,7 +339,7 @@ class DeltaWriter:
     def write_metrics(self, table_key: str, records: list[dict], mode: str = "append") -> dict:
         """Write records to a Delta table."""
         table_name = DELTA_TABLES.get(table_key, f"{OPS_CATALOG}.{OPS_SCHEMA}.{table_key}")
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         # Add snapshot_timestamp only for tables that have it
         # (pg_stat_history, lakebase_metrics). Other tables use their own timestamp columns.
@@ -356,6 +365,7 @@ class DeltaWriter:
             return self._write_via_sql_api(table_name, records, mode)
 
         from pyspark.sql import Row
+
         rows = [Row(**r) for r in records]
         df = self._spark.createDataFrame(rows)
         df.write.mode(mode).saveAsTable(table_name)
@@ -374,7 +384,7 @@ class DeltaWriter:
         total_written = 0
         batch_size = 100
         for i in range(0, len(records), batch_size):
-            batch = records[i:i + batch_size]
+            batch = records[i : i + batch_size]
             values_parts = []
             for record in batch:
                 vals = []
@@ -423,7 +433,7 @@ class DeltaWriter:
         manifest = result.get("manifest", {})
         columns = [col["name"] for col in manifest.get("schema", {}).get("columns", [])]
         data_array = result.get("result", {}).get("data_array", [])
-        return [dict(zip(columns, row)) for row in data_array]
+        return [dict(zip(columns, row, strict=False)) for row in data_array]
 
     def write_archive(self, archive_table: str, records: list[dict]) -> dict:
         """Write cold data to archive Delta table."""
