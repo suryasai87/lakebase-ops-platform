@@ -58,6 +58,8 @@ class AssessmentMixin:
         mock: bool = True,
         source_user: str = "",
         source_password: str = "",
+        subscription_id: str = "",
+        resource_group: str = "",
     ) -> dict:
         """
         Connect read-only to a source PostgreSQL instance and discover its schema,
@@ -81,7 +83,10 @@ class AssessmentMixin:
             db_profile = discover_fn(database or "app_production")
         else:
             if source_engine == "cosmosdb-nosql":
-                db_profile = self._live_discover_cosmosdb(endpoint, database, source_user, source_password)
+                db_profile = self._live_discover_cosmosdb(
+                    endpoint, database, source_user, source_password,
+                    subscription_id=subscription_id, resource_group=resource_group,
+                )
             else:
                 db_profile = self._live_discover(endpoint, database, source_user, source_password)
 
@@ -122,6 +127,8 @@ class AssessmentMixin:
                 "cosmos_ru_per_sec": db_profile.cosmos_ru_per_sec or 0,
                 "cosmos_consistency_level": db_profile.cosmos_consistency_level or "Session",
                 "cosmos_change_feed_enabled": db_profile.cosmos_change_feed_enabled or False,
+                "cosmos_change_feed_mode": db_profile.cosmos_change_feed_mode or "LatestVersion",
+                "cosmos_backup_policy": db_profile.cosmos_backup_policy,
                 "cosmos_multi_region_writes": db_profile.cosmos_multi_region_writes or False,
                 "cosmos_regions": db_profile.cosmos_regions or [],
                 "cosmos_partition_key_paths": db_profile.cosmos_partition_key_paths or [],
@@ -1217,7 +1224,8 @@ class AssessmentMixin:
             return self._mock_workload()
 
     def _live_discover_cosmosdb(
-        self, endpoint: str, database: str, user: str = "", password: str = ""
+        self, endpoint: str, database: str, user: str = "", password: str = "",
+        subscription_id: str = "", resource_group: str = "",
     ) -> DatabaseProfile:
         """Connect to a live Cosmos DB account and discover its schema/configuration."""
         try:
@@ -1231,6 +1239,8 @@ class AssessmentMixin:
                 endpoint=endpoint,
                 key=password,
                 database_name=database,
+                subscription_id=subscription_id or None,
+                resource_group=resource_group or None,
             )
             return adapter.discover()
         except Exception as e:

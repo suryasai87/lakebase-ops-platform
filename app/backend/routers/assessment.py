@@ -75,6 +75,8 @@ class DiscoverRequest(BaseModel):
     mock: bool = True
     source_user: str = ""
     source_password: str = ""
+    subscription_id: str = ""
+    resource_group: str = ""
 
 
 class ProfileRequest(BaseModel):
@@ -119,6 +121,8 @@ def discover(req: DiscoverRequest):
         mock=req.mock,
         source_user=req.source_user,
         source_password=req.source_password,
+        subscription_id=req.subscription_id,
+        resource_group=req.resource_group,
     )
     pid = result.get("profile_id", "")
     if pid:

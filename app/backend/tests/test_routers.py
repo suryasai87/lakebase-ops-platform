@@ -287,6 +287,29 @@ class TestAssessmentCosmosDB:
         _profiles.set("cosmos-test-001", {"_profile": profile})
         return "cosmos-test-001"
 
+    @patch("app.backend.routers.assessment._get_agent")
+    def test_discover_cosmosdb_fields(self, mock_agent_fn):
+        """Discover response for CosmosDB must include change_feed_mode and backup_policy."""
+        agent = MagicMock()
+        agent.connect_and_discover.return_value = {
+            "profile_id": "cosmos-disco-1",
+            "source_engine": "cosmosdb-nosql",
+            "cosmos_change_feed_enabled": False,
+            "cosmos_change_feed_mode": "LatestVersion",
+            "cosmos_backup_policy": "continuous",
+        }
+        mock_agent_fn.return_value = agent
+        resp = _post("/api/assessment/discover", json={
+            "mock": True,
+            "source_engine": "cosmosdb-nosql",
+            "subscription_id": "sub-123",
+            "resource_group": "rg-test",
+        })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cosmos_change_feed_mode"] == "LatestVersion"
+        assert body["cosmos_backup_policy"] == "continuous"
+
     def test_cost_estimate_cosmosdb(self):
         pid = self._seed_cosmosdb_profile()
         resp = _get(f"/api/assessment/cost-estimate/{pid}")

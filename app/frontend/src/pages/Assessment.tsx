@@ -90,6 +90,8 @@ export default function Assessment() {
     region: "us-east-1",
     source_user: "",
     source_password: "",
+    subscription_id: "",
+    resource_group: "",
   });
 
   const [discover, setDiscover] = useState<any>(null);
@@ -348,6 +350,32 @@ export default function Assessment() {
                     size="small"
                     sx={{ mb: 2 }}
                   />
+                  {form.source_engine === "cosmosdb-nosql" && (
+                    <>
+                      <Divider sx={{ my: 1 }} />
+                      <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: "block" }}>
+                        Optional - needed for backup policy detection
+                      </Typography>
+                      <TextField
+                        fullWidth
+                        label="Azure Subscription ID"
+                        placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                        value={form.subscription_id}
+                        onChange={(e) => setForm({ ...form, subscription_id: e.target.value })}
+                        size="small"
+                        sx={{ mb: 2 }}
+                      />
+                      <TextField
+                        fullWidth
+                        label="Azure Resource Group"
+                        placeholder="my-resource-group"
+                        value={form.resource_group}
+                        onChange={(e) => setForm({ ...form, resource_group: e.target.value })}
+                        size="small"
+                        sx={{ mb: 2 }}
+                      />
+                    </>
+                  )}
                 </>
               )}
               <Button
@@ -454,7 +482,20 @@ export default function Assessment() {
                       <Typography variant="caption" color="text.secondary">
                         Change Feed
                       </Typography>
-                      <Typography>{discover.cosmos_change_feed_enabled ? "Yes" : "No"}</Typography>
+                      <Typography>
+                        {discover.cosmos_change_feed_mode
+                          || (discover.cosmos_change_feed_enabled ? "AllVersionsAndDeletes" : "LatestVersion")}
+                      </Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Backup Policy
+                      </Typography>
+                      <Typography>
+                        {discover.cosmos_backup_policy
+                          ? discover.cosmos_backup_policy.charAt(0).toUpperCase() + discover.cosmos_backup_policy.slice(1)
+                          : "Unknown"}
+                      </Typography>
                     </Grid>
                     <Grid item xs={4} sm={2}>
                       <Typography variant="caption" color="text.secondary">
