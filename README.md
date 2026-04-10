@@ -1,6 +1,6 @@
 # LakebaseOps: Autonomous Database Operations Platform
 
-> **v2.3** | 3 Agents | 51 Tools | 9 Source Engines | PostgreSQL 17
+> **v2.6** | 3 Agents | 51 Tools | 10 Source Engines | PostgreSQL 17
 
 Automated DBA Operations, Monitoring & Migration Assessment for [Databricks Lakebase](https://docs.databricks.com/en/lakebase/index.html) (managed PostgreSQL 17).
 
@@ -275,7 +275,8 @@ The `AssessmentMixin` provides a 4-step pipeline for evaluating external databas
 
 | Engine | Cloud | Key Differentiators |
 |--------|-------|-------------------|
-| Aurora PostgreSQL | AWS | IAM auth, I/O-optimized storage, RDS Proxy |
+| Aurora PostgreSQL (Standard) | AWS | IAM auth, per-I/O billing, RDS Proxy |
+| Aurora PostgreSQL (I/O-Optimized) | AWS | IAM auth, bundled I/O, higher compute rate |
 | RDS PostgreSQL | AWS | Standard managed PG, gp3 storage |
 | Cloud SQL for PostgreSQL | GCP | Cloud SQL Auth Proxy, `google_ml_integration` |
 | Azure Database for PostgreSQL | Azure | Entra ID auth, built-in PgBouncer |
@@ -307,6 +308,7 @@ lakebase-ops-platform/
 │
 ├── agents/                              # 3 AI agents (mixin-based architecture)
 │   ├── provisioning/                    # 21 tools: project, branching, migration, governance, assessment
+│   │   ├── cosmos_adapter.py           # Live Cosmos DB discovery via azure-cosmos SDK
 │   ├── performance/                     # 14 tools: metrics, indexes, maintenance, optimization
 │   └── health/                          # 16 tools: monitoring, sync, archival, connections, operations
 │
@@ -327,6 +329,7 @@ lakebase-ops-platform/
 │   ├── settings.py                      # Environment-driven settings (dataclasses)
 │   ├── migration_profiles.py            # Assessment data models + SourceEngine enum
 │   ├── pricing.py                       # Static pricing registry (per-engine, per-region)
+│   ├── pricing_fetcher.py              # Live pricing: Azure + AWS Price List APIs + cache + fallback
 │   ├── branch_policies.yaml             # Branch naming, TTL, protection rules
 │   └── sensitive_columns.yaml           # Column masking patterns
 │
@@ -424,10 +427,80 @@ Configured in `config/settings.py` via `AlertThresholds`:
 
 ### Pricing Configuration
 
-Cost estimates use a static pricing registry in `config/pricing.py`. To update:
-1. Edit rates under `SOURCE_ENGINES` and/or `LAKEBASE_PRICING`
+Cost estimates use a 3-tier pricing architecture:
+
+1. **Live fetch** - Azure Retail Prices API (CosmosDB) and AWS Price List Bulk API (Aurora, RDS, DynamoDB) are queried for current rates
+2. **File cache** - Fetched rates are cached locally at `~/.lakebase-ops/pricing_cache.json` (24h TTL)
+3. **Static fallback** - All engines have baseline rates in `config/pricing.py` used when live fetch is unavailable
+
+The cost estimate API response includes a `pricing_source` field (`"live"`, `"cached"`, or `"static"`) to indicate freshness.
+
+**Lakebase pricing** uses the "Database Serverless Compute" SKU (`{PREMIUM|ENTERPRISE}_DATABASE_SERVERLESS_COMPUTE_{REGION}`). Each CU consumes **1 DBU/hr**, and the per-DBU list price depends on the Databricks tier and cloud provider:
+
+| Tier | AWS/GCP (US) | Azure (US) | Formula |
+|------|-------------|-----------|---------|
+| Premium | $0.40/DBU | $0.46/DBU | CU x 1 DBU/CU/hr x dbu_rate x 730 hrs/month |
+| Enterprise | $0.52/DBU | $0.60/DBU | CU x 1 DBU/CU/hr x dbu_rate x 730 hrs/month |
+
+Azure Databricks list prices are ~13-15% higher than AWS/GCP for equivalent SKUs. Azure "Premium" is functionally equivalent to AWS/GCP "Enterprise" in feature set.
+
+The cost estimate API accepts an optional `?tier=premium|enterprise` parameter (default: `premium`) and returns per-environment cost breakdowns along with committed-use discount references (1-year ~25%, 3-year ~40% savings).
+
+All cost estimates include a prominent disclaimer: rates are published on-demand list prices. Contact your Databricks account team for committed-use discounts and accurate contract pricing.
+
+**Rate confidence indicators:** Each engine has a `confidence` field:
+- `verified` - Cross-checked against the public pricing API within the last 30 days
+- `estimated` - Sourced from the marketing/pricing page but not validated via API
+- `stale` - Not verified in >90 days
+
+**DynamoDB pricing model:** DynamoDB uses per-request pricing (WRU at $1.25/M, RRU at $0.25/M for us-east-1) with the workload's read/write ratio applied to split QPS into reads vs writes. There is no hourly compute cost.
+
+**Aurora I/O-Optimized:** A separate engine entry (`aurora-postgresql-io`) captures the I/O-Optimized storage tier ($0.675/hr compute, $0.225/GB storage, $0/IO for us-east-1) used by ~40% of production Aurora customers.
+
+### Rate Validation
+
+To verify rates against public pricing APIs:
+
+```bash
+# Aurora/RDS - AWS Price List Bulk API (unauthenticated)
+curl -s "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/current/us-east-1/index.json" | python3 -c "
+import json,sys; d=json.load(sys.stdin)
+for sku,p in d['products'].items():
+  a=p.get('attributes',{})
+  if a.get('instanceType')=='db.r6g.xlarge' and 'Aurora' in a.get('databaseEngine','') and 'PostgreSQL' in a.get('databaseEngine',''):
+    for t in d['terms']['OnDemand'].get(sku,{}).values():
+      for dim in t['priceDimensions'].values():
+        print(f'{a[\"databaseEngine\"]}: \${dim[\"pricePerUnit\"][\"USD\"]}/hr')
+"
+
+# CosmosDB - Azure Retail Prices API (unauthenticated)
+curl -s "https://prices.azure.com/api/retail/prices?\$filter=serviceName%20eq%20'Azure%20Cosmos%20DB'%20and%20armRegionName%20eq%20'eastus'%20and%20skuName%20eq%20'D1'%20and%20meterName%20eq%20'100%20RUs'" | python3 -c "import json,sys; [print(f'\${i[\"retailPrice\"]}/100RU/hr') for i in json.load(sys.stdin)['Items'] if i['type']=='Consumption']"
+
+# DynamoDB - AWS Price List Bulk API (unauthenticated)
+curl -s "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonDynamoDB/current/us-east-1/index.json" | python3 -c "
+import json,sys; d=json.load(sys.stdin)
+for sku,p in d['products'].items():
+  a=p.get('attributes',{})
+  if 'WriteRequestUnits' in a.get('usagetype','') or 'ReadRequestUnits' in a.get('usagetype',''):
+    for t in d['terms']['OnDemand'].get(sku,{}).values():
+      for dim in t['priceDimensions'].values():
+        price=float(dim['pricePerUnit']['USD'])
+        if price>0: print(f'{a[\"usagetype\"]}: \${price}/unit')
+"
+```
+
+To update static rates:
+1. Edit rates under `SOURCE_ENGINES` and/or `LAKEBASE_PRICING` tiers
 2. Update `last_verified` date for each modified engine
-3. Bump `PRICING_VERSION` to the current month
+3. Update the `confidence` field to reflect how verification was done
+4. Bump `PRICING_VERSION` to the current month
+
+### Optional Dependencies
+
+| Package | Purpose | Required? |
+|---------|---------|-----------|
+| `azure-cosmos` | Live Cosmos DB discovery (real account profiling) | No - gracefully falls back to mock data |
+| `requests` | Azure Retail Prices API + AWS Price List API for live pricing | No - falls back to static pricing registry |
 
 ---
 
@@ -494,8 +567,9 @@ Set `LAKEBASE_LOCAL_DEV=true` in your `.env` to skip auth middleware when runnin
 2. Add `_mock_discover_<engine>()` in `agents/provisioning/assessment.py`
 3. Update `utils/blueprint_generator.py` dictionaries
 4. Add scoring logic to `utils/readiness_scorer.py`
-5. Add pricing to `config/pricing.py`
-6. Update `ENGINE_LABELS` in `app/frontend/src/pages/Assessment.tsx`
+5. Add pricing to `config/pricing.py` (static rates)
+6. For live pricing, add a fetch function to `config/pricing_fetcher.py`
+7. Update `ENGINE_LABELS` in `app/frontend/src/pages/Assessment.tsx`
 
 ---
 
@@ -520,12 +594,54 @@ See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for detailed guidelines.
 5. **Mock mode for local development** — All external calls wrapped in mock-capable clients
 6. **Event-driven coordination** — Provisioning → Performance → Health via EventType subscriptions
 7. **Risk-stratified remediation** — Low-risk auto-executes, medium/high requires approval
-8. **Static pricing registry** — Rates from official pricing pages, versioned and auditable
+8. **Tier-aware cross-cloud pricing** — Rates from official pricing APIs (AWS + Azure), versioned and auditable, with confidence indicators and Azure ~15% uplift
 9. **Shared auth utilities** — Token management and SQL execution centralized in `utils/databricks_auth.py`
 
 ---
 
 ## Changelog
+
+### v2.6 (2026-03-11)
+
+- **Cost estimator audit**: corrected Aurora ($0.48->$0.519), RDS ($0.48->$0.45), Azure Flex ($0.37->$0.356) rates against public pricing APIs
+- Added Aurora I/O-Optimized as separate engine (`aurora-postgresql-io`): $0.675/hr compute, $0.225/GB storage, $0/IO
+- Restructured DynamoDB pricing model: separate WRU ($1.25/M) and RRU ($0.25/M) rates using workload `read_write_ratio`
+- Applied ~15% Azure uplift to Lakebase rates: Azure Premium $0.46/DBU, Enterprise $0.60/DBU (vs AWS $0.40/$0.52)
+- Documented cross-cloud tier equivalence: Azure Premium = AWS Enterprise in feature set
+- Fixed CU estimate formula: now uses assessment's `recommended_cu` or `connections/209` instead of naive `connections/50`
+- Added AWS Price List Bulk API fetcher for Aurora, RDS, and DynamoDB live pricing (same 3-tier pattern as CosmosDB)
+- Added Lakebase committed-use discount references: 1-year (~25%) and 3-year (~40%) savings with estimated totals
+- Added `confidence` indicator per engine (`verified`/`estimated`/`stale`) and `last_verified` dates
+- Added "Rate Validation" section to README with curl commands for verifying rates against public APIs
+- 10 source engines supported (was 9): Aurora Standard, Aurora I/O-Optimized, RDS, Cloud SQL, Azure Flex, AlloyDB, Supabase, Self-Managed, DynamoDB, CosmosDB
+
+### v2.5 (2026-03-11)
+
+- Corrected Lakebase pricing to use "Database Serverless Compute" SKU: $0.40/DBU (Premium), $0.52/DBU (Enterprise)
+- Fixed compute formula from `CU x 2 DBU/CU x rate` to `CU x 1 DBU/CU/hr x rate` (1 DBU per CU per hour)
+- Added tier-aware pricing: `?tier=premium|enterprise` query parameter on cost estimate API
+- Added environment-aware sizing recommendations (dev/staging/prod) with CU ranges, scale-to-zero, and connection limits
+- Added `EnvironmentSizing` dataclass and `CU_TO_MAX_CONNECTIONS` mapping from official Lakebase specs
+- Environment sizing table in Assessment UI with Premium/Enterprise tier selector
+- Enhanced CostEstimate component: tier label, SKU reference, 1 DBU/CU/hr assumption, stronger disclaimer
+- Added `LAKEBASE_COST_DISCLAIMER` with explicit "contact your Databricks account team" guidance
+- Added pricing provenance: `source_url`, `sku_pattern`, `last_verified`, `dbu_per_cu_hour` in registry
+- Per-environment cost breakdown in cost estimate API (dev ~35% utilization, staging ~60%, prod always-on)
+- 181 unit tests passing (3 new test sections: pricing registry, environment sizing, cost formula)
+
+### v2.4 (2026-03-11)
+
+- Live Cosmos DB discovery adapter using `azure-cosmos` SDK (`agents/provisioning/cosmos_adapter.py`)
+- Engine-aware routing: `mock=False` for CosmosDB now calls the live adapter (graceful fallback to mock if SDK absent)
+- 3-tier pricing architecture: live fetch from Azure Retail Prices API -> file cache (24h TTL) -> static fallback
+- Improved CosmosDB cost model: multi-region write multiplier, autoscale utilization model, backup cost, reserved capacity reference
+- Fixed warnings propagation: readiness scorer warnings now surface through API (was aliased to `unsupported_extensions`)
+- Migration Warnings section in Assessment UI (default expanded, severity-aware styling)
+- Added `cosmos_autoscale_max_ru` and `cosmos_backup_policy` fields to `DatabaseProfile`
+- Added `pricing_source` indicator (live/cached/static) to cost estimate API and UI
+- New backend tests: CosmosDB cost-estimate, extension-matrix, warnings propagation
+- New unit tests: live discover fallback, live workload from profile, pricing fetcher, warnings propagation
+- New frontend tests: CosmosDB discovery fields rendering, migration warnings display
 
 ### v2.3 (2026-03-11)
 
