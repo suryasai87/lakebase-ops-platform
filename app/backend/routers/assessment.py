@@ -283,7 +283,20 @@ def assessment_extension_matrix(profile_id: str):
 
     matrix = []
 
-    if is_nosql:
+    if is_nosql and engine == "cosmosdb-nosql":
+        from utils.readiness_scorer import COSMOSDB_FEATURE_SUPPORT, COSMOSDB_FEATURE_WORKAROUNDS
+
+        for feature, status in COSMOSDB_FEATURE_SUPPORT.items():
+            workaround = COSMOSDB_FEATURE_WORKAROUNDS.get(feature, "")
+            matrix.append(
+                {
+                    "name": feature,
+                    "version": "",
+                    "status": status,
+                    "workaround": workaround,
+                }
+            )
+    elif is_nosql:
         from utils.readiness_scorer import DYNAMODB_FEATURE_SUPPORT, DYNAMODB_FEATURE_WORKAROUNDS
 
         for feature, status in DYNAMODB_FEATURE_SUPPORT.items():
@@ -375,9 +388,18 @@ def assessment_cost_estimate(profile_id: str):
 
     cu_estimate = max(1, min(32, avg_connections / 50))
 
-    source_compute = src_rates["compute_per_hour"] * HOURS_PER_MONTH
-    source_storage = src_rates["storage_per_gb_month"] * size_gb
-    source_io = src_rates["io_per_million"] * (avg_qps * 2_592_000 / 1_000_000) if src_rates["io_per_million"] else 0
+    is_cosmosdb = engine == "cosmosdb-nosql"
+    if is_cosmosdb:
+        ru_per_sec = db.cosmos_ru_per_sec or 1000
+        source_compute = (ru_per_sec / 100) * 0.008 * HOURS_PER_MONTH
+        source_storage = src_rates["storage_per_gb_month"] * size_gb
+        source_io = 0.0
+    else:
+        source_compute = src_rates["compute_per_hour"] * HOURS_PER_MONTH
+        source_storage = src_rates["storage_per_gb_month"] * size_gb
+        source_io = (
+            src_rates["io_per_million"] * (avg_qps * 2_592_000 / 1_000_000) if src_rates["io_per_million"] else 0
+        )
     source_total = source_compute + source_storage + source_io
 
     lakebase_dbu_per_hour = cu_estimate * 2
@@ -387,6 +409,16 @@ def assessment_cost_estimate(profile_id: str):
 
     savings_pct = round((1 - lakebase_total / source_total) * 100, 1) if source_total > 0 else 0
 
+    pricing_urls = {
+        "source": engine_cfg["source_url"],
+        "lakebase": LAKEBASE_PRICING["source_url"],
+    }
+    cost_disclaimer = (
+        "This is an estimate based on published list prices. Actual costs depend on "
+        "throughput patterns, reserved capacity, multi-region replication, and negotiated "
+        "discounts. Contact your Databricks account team for an accurate cost comparison."
+    )
+
     return {
         "profile_id": profile_id,
         "engine": engine,
@@ -395,6 +427,8 @@ def assessment_cost_estimate(profile_id: str):
         "cu_estimate": round(cu_estimate, 1),
         "pricing_version": PRICING_VERSION,
         "disclaimer": PRICING_DISCLAIMER,
+        "cost_disclaimer": cost_disclaimer,
+        "pricing_urls": pricing_urls,
         "source": {
             "label": engine_cfg["label"],
             "instance_ref": engine_cfg["instance_ref"],

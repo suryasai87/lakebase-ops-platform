@@ -40,6 +40,11 @@ interface CostBreakdown {
   formulas?: Formulas;
 }
 
+interface PricingUrls {
+  source?: string;
+  lakebase?: string;
+}
+
 interface CostEstimateProps {
   source: CostBreakdown;
   lakebase: CostBreakdown;
@@ -50,6 +55,8 @@ interface CostEstimateProps {
   region?: string;
   pricingVersion?: string;
   disclaimer?: string;
+  costDisclaimer?: string;
+  pricingUrls?: PricingUrls;
 }
 
 function fmt(n: number): string {
@@ -90,6 +97,8 @@ export default function CostEstimate({
   region,
   pricingVersion,
   disclaimer,
+  costDisclaimer,
+  pricingUrls,
 }: CostEstimateProps) {
   const chartData = [
     {
@@ -126,6 +135,12 @@ export default function CostEstimate({
             <Chip label={`rates: ${pricingVersion}`} size="small" variant="outlined" sx={{ opacity: 0.7 }} />
           )}
         </Box>
+
+        {costDisclaimer && (
+          <Alert severity="warning" sx={{ mb: 2, py: 0.5, "& .MuiAlert-message": { fontSize: "0.8rem" } }}>
+            {costDisclaimer}
+          </Alert>
+        )}
 
         {disclaimer && (
           <Alert severity="info" sx={{ mb: 2, py: 0.25, "& .MuiAlert-message": { fontSize: "0.75rem" } }}>
@@ -271,13 +286,13 @@ export default function CostEstimate({
 
         {/* Pricing source links */}
         <Box sx={{ display: "flex", gap: 2, mt: 1 }}>
-          {source.source_url && (
-            <Link href={source.source_url} target="_blank" rel="noopener" variant="caption" sx={{ fontSize: "0.65rem" }}>
+          {(source.source_url || pricingUrls?.source) && (
+            <Link href={source.source_url || pricingUrls?.source} target="_blank" rel="noopener" variant="caption" sx={{ fontSize: "0.65rem" }}>
               {source.label} pricing page
             </Link>
           )}
-          {lakebase.source_url && (
-            <Link href={lakebase.source_url} target="_blank" rel="noopener" variant="caption" sx={{ fontSize: "0.65rem" }}>
+          {(lakebase.source_url || pricingUrls?.lakebase) && (
+            <Link href={lakebase.source_url || pricingUrls?.lakebase} target="_blank" rel="noopener" variant="caption" sx={{ fontSize: "0.65rem" }}>
               Lakebase pricing page
             </Link>
           )}

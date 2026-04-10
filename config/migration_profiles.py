@@ -22,10 +22,12 @@ class SourceEngine(Enum):
     SUPABASE_POSTGRESQL = "supabase-postgresql"
     AURORA_MYSQL = "aurora-mysql"
     DYNAMODB = "dynamodb"
+    COSMOSDB_NOSQL = "cosmosdb-nosql"
 
 
 ENGINE_KIND: dict[str, str] = {
     "dynamodb": "nosql",
+    "cosmosdb-nosql": "nosql",
     "aurora-postgresql": "pg",
     "rds-postgresql": "pg",
     "cloud-sql-postgresql": "pg",
@@ -157,6 +159,15 @@ class DatabaseProfile:
     global_table_regions: list[str] | None = None
     item_size_avg_bytes: int | None = None
     dynamo_table_details: list[dict] | None = None
+    # CosmosDB-specific (None for non-CosmosDB engines)
+    cosmos_throughput_mode: str | None = None
+    cosmos_ru_per_sec: int | None = None
+    cosmos_partition_key_paths: list[str] | None = None
+    cosmos_consistency_level: str | None = None
+    cosmos_change_feed_enabled: bool | None = None
+    cosmos_multi_region_writes: bool | None = None
+    cosmos_regions: list[str] | None = None
+    cosmos_container_details: list[dict] | None = None
 
 
 # ── Assessment Results ─────────────────────────────────────────────────────

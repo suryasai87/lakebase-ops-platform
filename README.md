@@ -1,6 +1,6 @@
 # LakebaseOps: Autonomous Database Operations Platform
 
-> **v2.2** | 3 Agents | 51 Tools | 8 Source Engines | PostgreSQL 17
+> **v2.3** | 3 Agents | 51 Tools | 9 Source Engines | PostgreSQL 17
 
 Automated DBA Operations, Monitoring & Migration Assessment for [Databricks Lakebase](https://docs.databricks.com/en/lakebase/index.html) (managed PostgreSQL 17).
 
@@ -283,6 +283,7 @@ The `AssessmentMixin` provides a 4-step pipeline for evaluating external databas
 | Supabase PostgreSQL | Multi | `pg_graphql`, `pgjwt`, platform-managed |
 | Self-Managed PostgreSQL | Any | Full extension control |
 | Amazon DynamoDB | AWS | NoSQL cross-engine migration (GSI/LSI, Streams) |
+| Azure Cosmos DB (NoSQL) | Azure | NoSQL cross-engine migration (RU-based, Change Feed, partition keys) |
 
 ### Assessment Page Enrichments
 
@@ -351,7 +352,7 @@ lakebase-ops-platform/
 │
 ├── tests/                               # Test suite
 │   ├── conftest.py                      # Shared fixtures (mock agents, clients)
-│   ├── test_assessment.py               # Assessment pipeline tests (incl. DynamoDB)
+│   ├── test_assessment.py               # Assessment pipeline tests (incl. DynamoDB, CosmosDB)
 │   ├── test_framework.py                # AgentFramework tests
 │   ├── test_migration_workflow.py        # End-to-end migration workflow tests
 │   ├── test_sql_queries.py              # SQL constant validation
@@ -525,6 +526,14 @@ See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for detailed guidelines.
 ---
 
 ## Changelog
+
+### v2.3 (2026-03-11)
+
+- Added Azure Cosmos DB (NoSQL API) as 9th source engine (second NoSQL cross-engine migration)
+- CosmosDB-specific readiness scoring: feature compatibility matrix, partition key analysis, RU-based cost estimation
+- CosmosDB-to-PostgreSQL type mapping and 4-phase migration blueprint (Change Feed, ADF, Spark Connector)
+- Enhanced cost estimator with pricing URLs and prominent disclaimer banner
+- Stronger cost disclaimer with contact-your-account-team guidance
 
 ### v2.2 (2026-03-26)
 

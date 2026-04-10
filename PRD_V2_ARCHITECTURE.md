@@ -76,7 +76,32 @@ All three monolithic agent files (~800+ lines each) have been refactored into su
 
 ---
 
-## I-C. Summary of Changes from V2.1 to V2.2
+## I-C. Summary of Changes from V2.2 to V2.3
+
+### 12. Azure Cosmos DB Source Engine (8 -> 9)
+
+Added Azure Cosmos DB (NoSQL API) as the second NoSQL source engine, extending the cross-engine migration pattern established by DynamoDB:
+
+| Engine | Cloud | Type | Key Features |
+|--------|-------|------|-------------|
+| Azure Cosmos DB (NoSQL) | Azure | NoSQL | Partition keys, RU-based throughput, Change Feed, Multi-region writes, 5 consistency levels, Container-level indexing policies |
+
+**CosmosDB-specific DatabaseProfile fields:** `cosmos_throughput_mode`, `cosmos_ru_per_sec`, `cosmos_partition_key_paths`, `cosmos_consistency_level`, `cosmos_change_feed_enabled`, `cosmos_multi_region_writes`, `cosmos_regions`, `cosmos_container_details` (all `Optional`, `None` for non-CosmosDB engines).
+
+**Files changed:**
+- `config/migration_profiles.py` - Added `COSMOSDB_NOSQL` to `SourceEngine`, `ENGINE_KIND` map, CosmosDB-specific fields to `DatabaseProfile`
+- `agents/provisioning/assessment.py` - Added `_mock_discover_cosmosdb()`, `_mock_workload_cosmosdb()`, conditional summary fields for CosmosDB
+- `utils/readiness_scorer.py` - Added `COSMOSDB_FEATURE_SUPPORT`, `COSMOSDB_FEATURE_WORKAROUNDS`, CosmosDB scoring paths (features, complexity, replication, operational)
+- `utils/blueprint_generator.py` - CosmosDB engine maps, CosmosDB-specific phases (relational modeling from partition keys, ADF/Spark export, SDK rewrite)
+- `config/pricing.py` - CosmosDB provisioned throughput pricing entry (RU/s-based compute, GB-based storage)
+- `app/backend/routers/assessment.py` - CosmosDB feature matrix, RU-based cost estimation, pricing URLs, enhanced disclaimer
+- `app/frontend/src/pages/Assessment.tsx` - CosmosDB engine option, conditional discovery display (RU/s, consistency, Change Feed)
+- `app/frontend/src/components/CostEstimate.tsx` - Pricing URLs display, prominent cost disclaimer banner
+- `test_assessment.py` - 4 new CosmosDB tests (discovery, readiness, blueprint, end-to-end)
+
+---
+
+## I-D. Summary of Changes from V2.1 to V2.2
 
 ### 11. Amazon DynamoDB Source Engine (7 -> 8)
 
@@ -175,7 +200,7 @@ lakebase-ops-platform/
 ├── config/
 │   ├── __init__.py
 │   ├── settings.py                  # All constants: workspace, catalog, tables, thresholds
-│   ├── migration_profiles.py        # Assessment dataclasses + SourceEngine enum (8 engines)
+│   ├── migration_profiles.py        # Assessment dataclasses + SourceEngine enum (9 engines)
 │   └── pricing.py                   # Static pricing registry: per-engine, per-region rates + formulas
 |
 ├── framework/
@@ -473,13 +498,15 @@ Simulation Results:
     - vacuum_history: 4 records
 
 Assessment Coverage:
-  - 8 source engines tested (Aurora, RDS, Cloud SQL, Azure, Self-Managed, AlloyDB, Supabase, DynamoDB)
-  - Per-engine extension/feature profiles verified (unique extensions per PG engine, feature matrix for DynamoDB)
+  - 9 source engines tested (Aurora, RDS, Cloud SQL, Azure, Self-Managed, AlloyDB, Supabase, DynamoDB, CosmosDB)
+  - Per-engine extension/feature profiles verified (unique extensions per PG engine, feature matrix for DynamoDB and CosmosDB)
   - Region-aware cost estimation verified across AWS, GCP, Azure regions
   - Extension compatibility matrix validated (supported/workaround/unsupported)
   - DynamoDB feature compatibility matrix validated (Streams, TTL, DAX, Global Tables)
   - DynamoDB cross-engine blueprint verified (relational modeling, S3 export, ETL, app rewrite)
-  - Pricing formulas verified against config/pricing.py registry (including DynamoDB WRU/RRU)
+  - CosmosDB feature compatibility matrix validated (Change Feed, Multi-region writes, Consistency levels, Integrated cache)
+  - CosmosDB cross-engine blueprint verified (relational modeling, ADF/Spark export, SDK rewrite)
+  - Pricing formulas verified against config/pricing.py registry (including DynamoDB WRU/RRU, CosmosDB RU/s)
 
 Verification:
   - No information_schema references in agents/
@@ -500,7 +527,7 @@ Verification:
 | `POST` | `/api/assessment/profile/{id}` | `assessment.py` | Profile workload (QPS, TPS, connections) |
 | `POST` | `/api/assessment/readiness/{id}` | `assessment.py` | Score readiness (6 dimensions) |
 | `POST` | `/api/assessment/blueprint/{id}` | `assessment.py` | Generate 4-phase migration blueprint |
-| `GET` | `/api/assessment/extension-matrix/{id}` | `assessment.py` | Extension (PG) or feature (DynamoDB) compatibility matrix |
+| `GET` | `/api/assessment/extension-matrix/{id}` | `assessment.py` | Extension (PG) or feature (DynamoDB/CosmosDB) compatibility matrix |
 | `GET` | `/api/assessment/timeline/{id}` | `assessment.py` | Migration timeline for Gantt chart |
 | `GET` | `/api/assessment/cost-estimate/{id}` | `assessment.py` | Region-aware cost comparison |
 | `GET` | `/api/assessment/regions/{engine}` | `assessment.py` | Available regions for engine |
@@ -549,7 +576,7 @@ SOURCE_ENGINES = {
 }
 ```
 
-### SourceEngine Enum (8 engines)
+### SourceEngine Enum (9 engines)
 
 ```python
 class SourceEngine(Enum):
@@ -562,6 +589,7 @@ class SourceEngine(Enum):
     SUPABASE_POSTGRESQL = "supabase-postgresql"
     AURORA_MYSQL = "aurora-mysql"
     DYNAMODB = "dynamodb"
+    COSMOSDB_NOSQL = "cosmosdb-nosql"
 ```
 
 ### ENGINE_KIND Discriminator
@@ -569,6 +597,7 @@ class SourceEngine(Enum):
 ```python
 ENGINE_KIND: dict[str, str] = {
     "dynamodb": "nosql",
+    "cosmosdb-nosql": "nosql",
     "aurora-postgresql": "pg",
     "rds-postgresql": "pg",
     "cloud-sql-postgresql": "pg",

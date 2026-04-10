@@ -44,9 +44,10 @@ const ENGINE_LABELS: Record<string, string> = {
   "alloydb-postgresql": "AlloyDB PG",
   "supabase-postgresql": "Supabase PG",
   "dynamodb": "DynamoDB",
+  "cosmosdb-nosql": "Cosmos DB",
 };
 
-const NOSQL_ENGINES = new Set(["dynamodb"]);
+const NOSQL_ENGINES = new Set(["dynamodb", "cosmosdb-nosql"]);
 
 function severityColor(severity: string): "error" | "warning" | "info" | "success" {
   switch (severity) {
@@ -288,6 +289,7 @@ export default function Assessment() {
                 <option value="alloydb-postgresql">AlloyDB PostgreSQL</option>
                 <option value="supabase-postgresql">Supabase PostgreSQL</option>
                 <option value="dynamodb">Amazon DynamoDB</option>
+                <option value="cosmosdb-nosql">Azure Cosmos DB (NoSQL)</option>
               </TextField>
               <TextField
                 fullWidth
@@ -407,7 +409,46 @@ export default function Assessment() {
                   </Grid>
                 </Grid>
 
-                {NOSQL_ENGINES.has(form.source_engine) ? (
+                {form.source_engine === "cosmosdb-nosql" ? (
+                  <Grid container spacing={2} sx={{ mt: 1 }}>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Throughput
+                      </Typography>
+                      <Typography>{discover.cosmos_throughput_mode ?? "N/A"}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        RU/s
+                      </Typography>
+                      <Typography>{discover.cosmos_ru_per_sec ?? 0}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Consistency
+                      </Typography>
+                      <Typography>{discover.cosmos_consistency_level ?? "N/A"}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Change Feed
+                      </Typography>
+                      <Typography>{discover.cosmos_change_feed_enabled ? "Yes" : "No"}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Multi-Region
+                      </Typography>
+                      <Typography>{discover.cosmos_multi_region_writes ? "Yes" : "No"}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Regions
+                      </Typography>
+                      <Typography>{(discover.cosmos_regions || []).length}</Typography>
+                    </Grid>
+                  </Grid>
+                ) : NOSQL_ENGINES.has(form.source_engine) ? (
                   <Grid container spacing={2} sx={{ mt: 1 }}>
                     <Grid item xs={4} sm={2}>
                       <Typography variant="caption" color="text.secondary">
@@ -802,6 +843,8 @@ export default function Assessment() {
                 region={costEstimate.region}
                 pricingVersion={costEstimate.pricing_version}
                 disclaimer={costEstimate.disclaimer}
+                costDisclaimer={costEstimate.cost_disclaimer}
+                pricingUrls={costEstimate.pricing_urls}
               />
             </Box>
           )}

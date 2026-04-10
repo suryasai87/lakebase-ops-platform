@@ -191,6 +191,25 @@ SOURCE_ENGINES: dict[str, dict] = {
             "io": "estimated_WCU/s x 2,592,000 sec/month / 1,000,000 x $1.25/million WRU",
         },
     },
+    "cosmosdb-nosql": {
+        "label": "Azure Cosmos DB (NoSQL API)",
+        "cloud": "azure",
+        "instance_ref": "Provisioned Throughput (Manual)",
+        "source_url": "https://azure.microsoft.com/en-us/pricing/details/cosmos-db/autoscale-provisioned/",
+        "last_verified": "2026-03",
+        "regions": {
+            "eastus": {"compute_per_hour": 0.08, "storage_per_gb_month": 0.25, "io_per_million": 0.0},
+            "westus2": {"compute_per_hour": 0.08, "storage_per_gb_month": 0.25, "io_per_million": 0.0},
+            "westeurope": {"compute_per_hour": 0.096, "storage_per_gb_month": 0.28, "io_per_million": 0.0},
+            "southeastasia": {"compute_per_hour": 0.10, "storage_per_gb_month": 0.30, "io_per_million": 0.0},
+            "default": {"compute_per_hour": 0.08, "storage_per_gb_month": 0.25, "io_per_million": 0.0},
+        },
+        "formulas": {
+            "compute": "provisioned_RU_per_sec / 100 x $0.008/100-RU/hr x 730 hrs/month",
+            "storage": "storage_gb x $0.25/GB/month",
+            "io": "N/A (RU cost covers read+write operations)",
+        },
+    },
 }
 
 # ── Lakebase Pricing ───────────────────────────────────────────────────────
@@ -270,6 +289,7 @@ ENGINE_CLOUD_MAP: dict[str, str] = {
     "supabase-postgresql": "multi",
     "self-managed-postgresql": "self-managed",
     "dynamodb": "aws",
+    "cosmosdb-nosql": "azure",
 }
 
 # Lakebase region key prefix by cloud

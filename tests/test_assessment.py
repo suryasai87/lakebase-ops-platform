@@ -818,6 +818,260 @@ def test_dynamodb_end_to_end(report: _TestReport):
 
 
 # =============================================================================
+# Test: CosmosDB Assessment
+# =============================================================================
+
+
+def test_cosmosdb_discovery(report: _TestReport):
+    print("\n--- CosmosDB Discovery ---")
+
+    from agents import ProvisioningAgent
+    from utils.alerting import AlertManager
+    from utils.delta_writer import DeltaWriter
+    from utils.lakebase_client import LakebaseClient
+
+    agent = ProvisioningAgent(
+        LakebaseClient(workspace_host="test", mock_mode=True),
+        DeltaWriter(mock_mode=True),
+        AlertManager(mock_mode=True),
+    )
+    agent.register_tools()
+
+    discovery = agent.connect_and_discover(
+        source_engine="cosmosdb-nosql",
+        mock=True,
+    )
+    report.add("CosmosDB: discovery returns profile_id", "profile_id" in discovery, discovery.get("profile_id", ""))
+    report.add(
+        "CosmosDB: engine is cosmosdb-nosql",
+        discovery.get("source_engine") == "cosmosdb-nosql",
+        f"{discovery.get('source_engine')}",
+    )
+    report.add(
+        "CosmosDB: has table_count", discovery.get("table_count", 0) > 0, f"{discovery.get('table_count')} containers"
+    )
+    report.add("CosmosDB: has size_gb", discovery.get("size_gb", 0) > 0, f"{discovery.get('size_gb')} GB")
+    report.add(
+        "CosmosDB: has cosmos_ru_per_sec",
+        discovery.get("cosmos_ru_per_sec", 0) > 0,
+        f"{discovery.get('cosmos_ru_per_sec')} RU/s",
+    )
+    report.add(
+        "CosmosDB: has cosmos_consistency_level",
+        discovery.get("cosmos_consistency_level") is not None,
+        f"{discovery.get('cosmos_consistency_level')}",
+    )
+    report.add(
+        "CosmosDB: has cosmos_throughput_mode",
+        discovery.get("cosmos_throughput_mode") is not None,
+        f"{discovery.get('cosmos_throughput_mode')}",
+    )
+    report.add(
+        "CosmosDB: has cosmos_change_feed_enabled",
+        discovery.get("cosmos_change_feed_enabled") is not None,
+        f"{discovery.get('cosmos_change_feed_enabled')}",
+    )
+    report.add(
+        "CosmosDB: no PG extensions field",
+        "extensions" not in discovery or "extension_count" not in discovery,
+        "No PG extensions in CosmosDB",
+    )
+    report.add(
+        "CosmosDB: source_version is CosmosDB",
+        discovery.get("source_version") == "CosmosDB",
+        f"{discovery.get('source_version')}",
+    )
+
+    workload = agent.profile_workload(profile_data=discovery, mock=True)
+    report.add("CosmosDB: workload has QPS", workload.get("avg_qps", 0) > 0, f"QPS={workload.get('avg_qps')}")
+    report.add("CosmosDB: workload has TPS", workload.get("avg_tps", 0) > 0, f"TPS={workload.get('avg_tps')}")
+
+
+def test_cosmosdb_readiness(report: _TestReport):
+    print("\n--- CosmosDB Readiness Scoring ---")
+
+    cosmos_db = DatabaseProfile(
+        name="cosmos-test",
+        size_bytes=50_000_000_000,
+        size_gb=46.6,
+        table_count=8,
+        schema_count=1,
+        schemas=["default"],
+        extensions=[],
+        functions=[],
+        triggers=[],
+        cosmos_throughput_mode="provisioned",
+        cosmos_ru_per_sec=4000,
+        cosmos_partition_key_paths=["/userId", "/orderId"],
+        cosmos_consistency_level="Session",
+        cosmos_change_feed_enabled=True,
+        cosmos_multi_region_writes=False,
+        cosmos_regions=["eastus"],
+        cosmos_container_details=[
+            {"name": "Users", "partition_key": "/userId", "ru_per_sec": 400, "indexing_policy": "consistent"},
+            {"name": "Orders", "partition_key": "/orderId", "ru_per_sec": 1000, "indexing_policy": "consistent"},
+        ],
+    )
+    workload = WorkloadProfile(avg_qps=2800, avg_tps=700, connection_count_peak=200)
+
+    result = compute_readiness_score(cosmos_db, workload, source_engine="cosmosdb-nosql")
+
+    report.add("CosmosDB: score > 0", result.overall_score > 0, f"Score={result.overall_score}")
+    report.add(
+        "CosmosDB: has 6 dimensions", len(result.dimension_scores) == 6, f"{len(result.dimension_scores)} dimensions"
+    )
+    report.add("CosmosDB: has blockers", len(result.blockers) > 0, f"{len(result.blockers)} blockers")
+    report.add(
+        "CosmosDB: feature_compatibility blocker present",
+        any(b.category == "feature_compatibility" for b in result.blockers),
+        "Feature compatibility blockers found",
+    )
+    report.add(
+        "CosmosDB: effort > 15 days (cross-engine)",
+        result.estimated_effort_days >= 15,
+        f"{result.estimated_effort_days} days",
+    )
+    report.add(
+        "CosmosDB: Integrated cache flagged as unsupported",
+        any("Integrated cache" in b.description for b in result.blockers),
+        "Integrated cache blocker found",
+    )
+
+    multi_region_db = DatabaseProfile(
+        name="cosmos-multi-region",
+        size_bytes=1_000_000_000,
+        size_gb=0.93,
+        table_count=3,
+        extensions=[],
+        functions=[],
+        triggers=[],
+        cosmos_throughput_mode="provisioned",
+        cosmos_ru_per_sec=2000,
+        cosmos_consistency_level="Strong",
+        cosmos_change_feed_enabled=True,
+        cosmos_multi_region_writes=True,
+        cosmos_regions=["eastus", "westeurope"],
+    )
+    result2 = compute_readiness_score(multi_region_db, source_engine="cosmosdb-nosql")
+    report.add(
+        "CosmosDB: multi-region writes -> HIGH blocker",
+        any("Multi-region" in b.description and b.severity == BlockerSeverity.HIGH for b in result2.blockers),
+        "Multi-region blocker found",
+    )
+    report.add(
+        "CosmosDB: Strong consistency warning",
+        any("Strong" in w for w in result2.warnings),
+        "Strong consistency warning found",
+    )
+
+
+def test_cosmosdb_blueprint(report: _TestReport):
+    print("\n--- CosmosDB Blueprint ---")
+
+    cosmos_db = DatabaseProfile(
+        name="cosmos-blueprint-test",
+        size_bytes=50_000_000_000,
+        size_gb=46.6,
+        table_count=8,
+        schema_count=1,
+        schemas=["default"],
+        extensions=[],
+        functions=[],
+        triggers=[],
+        cosmos_throughput_mode="provisioned",
+        cosmos_ru_per_sec=4000,
+        cosmos_consistency_level="Session",
+        cosmos_change_feed_enabled=True,
+        cosmos_multi_region_writes=False,
+        cosmos_regions=["eastus"],
+    )
+
+    assessment = compute_readiness_score(cosmos_db, source_engine="cosmosdb-nosql")
+    workload = WorkloadProfile(avg_qps=2800, avg_tps=700, connection_count_peak=200)
+
+    blueprint = generate_blueprint(
+        db_profile=cosmos_db,
+        assessment=assessment,
+        workload=workload,
+        source_endpoint="myaccount.documents.azure.com",
+        lakebase_endpoint="ep-xxx.database.us-east-1.cloud.databricks.com",
+        database_name="cosmos-blueprint-test",
+        source_engine="cosmosdb-nosql",
+    )
+
+    report.add(
+        "CosmosDB: strategy is cross_engine",
+        blueprint.strategy == MigrationStrategy.CROSS_ENGINE,
+        f"Strategy={blueprint.strategy.value}",
+    )
+    report.add("CosmosDB: 4 phases", len(blueprint.phases) == 4, f"{len(blueprint.phases)} phases")
+    report.add(
+        "CosmosDB: Phase 1 = Schema Design",
+        "Schema Design" in blueprint.phases[0].name or "Schema" in blueprint.phases[0].name,
+        blueprint.phases[0].name,
+    )
+    report.add(
+        "CosmosDB: Phase 3 = Application Rewrite", "Application" in blueprint.phases[2].name, blueprint.phases[2].name
+    )
+    report.add("CosmosDB: total days > 0", blueprint.total_estimated_days > 0, f"{blueprint.total_estimated_days} days")
+
+    md = render_blueprint_markdown(blueprint, cosmos_db, assessment, source_engine="cosmosdb-nosql")
+    report.add("CosmosDB: markdown has Cosmos DB label", "Cosmos DB" in md, "Cosmos DB label found")
+    report.add("CosmosDB: markdown has type mapping table", "jsonb" in md.lower(), "Type mapping present")
+    report.add(
+        "CosmosDB: markdown has Change Feed",
+        "Change Feed" in md or "change feed" in md.lower(),
+        "Change Feed mentioned",
+    )
+    report.add(
+        "CosmosDB: markdown has cross-engine note",
+        "cross-engine" in md.lower() or "NoSQL" in md,
+        "Cross-engine note present",
+    )
+
+
+def test_cosmosdb_end_to_end(report: _TestReport):
+    print("\n--- CosmosDB End-to-End Pipeline ---")
+
+    from agents import ProvisioningAgent
+    from utils.alerting import AlertManager
+    from utils.delta_writer import DeltaWriter
+    from utils.lakebase_client import LakebaseClient
+
+    agent = ProvisioningAgent(
+        LakebaseClient(workspace_host="test", mock_mode=True),
+        DeltaWriter(mock_mode=True),
+        AlertManager(mock_mode=True),
+    )
+    agent.register_tools()
+
+    discovery = agent.connect_and_discover(source_engine="cosmosdb-nosql", mock=True)
+    workload = agent.profile_workload(profile_data=discovery, mock=True)
+    assessment = agent.assess_readiness(profile_data=discovery, workload_data=workload)
+    blueprint = agent.generate_migration_blueprint(assessment_data=assessment, workload_data=workload)
+
+    report.add("CosmosDB E2E: Discovery succeeded", discovery.get("table_count", 0) > 0, "Discovery OK")
+    report.add("CosmosDB E2E: Workload profiled", workload.get("avg_qps", 0) > 0, "Workload OK")
+    report.add(
+        "CosmosDB E2E: Assessment scored",
+        assessment.get("overall_score", 0) > 0,
+        f"Score={assessment.get('overall_score')}",
+    )
+    report.add(
+        "CosmosDB E2E: Strategy is cross_engine",
+        assessment.get("_assessment") is not None or blueprint.get("strategy") == "cross_engine",
+        f"Strategy={blueprint.get('strategy')}",
+    )
+    report.add("CosmosDB E2E: Blueprint generated", blueprint.get("phase_count", 0) == 4, "Blueprint OK")
+
+    md = blueprint.get("report_markdown", "")
+    report.add("CosmosDB E2E: Report mentions Cosmos DB", "Cosmos DB" in md, "Cosmos DB in report")
+    report.add(
+        "CosmosDB E2E: Report has type mapping", "jsonb" in md.lower() or "JSONB" in md, "Type mapping in report"
+    )
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -825,7 +1079,7 @@ def test_dynamodb_end_to_end(report: _TestReport):
 def main():
     print("\n" + "=" * 70)
     print("  MIGRATION ASSESSMENT ACCELERATOR - TEST SUITE")
-    print("  Postgres & DynamoDB -> Lakebase Assessment & Migration")
+    print("  Postgres, DynamoDB & CosmosDB -> Lakebase Assessment & Migration")
     print("=" * 70)
 
     report = _TestReport()
@@ -839,6 +1093,10 @@ def main():
     test_dynamodb_readiness(report)
     test_dynamodb_blueprint(report)
     test_dynamodb_end_to_end(report)
+    test_cosmosdb_discovery(report)
+    test_cosmosdb_readiness(report)
+    test_cosmosdb_blueprint(report)
+    test_cosmosdb_end_to_end(report)
 
     success = report.summary()
     sys.exit(0 if success else 1)
