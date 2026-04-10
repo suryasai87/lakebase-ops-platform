@@ -80,7 +80,10 @@ class AssessmentMixin:
             discover_fn = _mock_engines.get(source_engine, self._mock_discover)
             db_profile = discover_fn(database or "app_production")
         else:
-            db_profile = self._live_discover(endpoint, database, source_user, source_password)
+            if source_engine == "cosmosdb-nosql":
+                db_profile = self._live_discover_cosmosdb(endpoint, database, source_user, source_password)
+            else:
+                db_profile = self._live_discover(endpoint, database, source_user, source_password)
 
         is_nosql = ENGINE_KIND.get(source_engine) == "nosql"
         engine = SourceEngine(source_engine)
@@ -217,7 +220,10 @@ class AssessmentMixin:
             else:
                 workload = self._mock_workload()
         else:
-            workload = self._live_workload(profile_data, source_user, source_password)
+            if engine_str == "cosmosdb-nosql":
+                workload = self._live_workload_cosmosdb(profile_data)
+            else:
+                workload = self._live_workload(profile_data, source_user, source_password)
 
         if profile_data and "_profile" in profile_data:
             profile_data["_profile"].workload = workload
@@ -286,6 +292,20 @@ class AssessmentMixin:
                     "workaround": b.workaround,
                 }
                 for b in assessment.blockers
+            ],
+            "warnings": list(assessment.warnings),
+            "sizing_by_env": [
+                {
+                    "env": es.env,
+                    "cu_min": es.cu_min,
+                    "cu_max": es.cu_max,
+                    "scale_to_zero": es.scale_to_zero,
+                    "autoscaling": es.autoscaling,
+                    "max_connections": es.max_connections,
+                    "ram_gb": es.ram_gb,
+                    "notes": es.notes,
+                }
+                for es in assessment.sizing_by_env
             ],
             "_assessment": assessment,
             "_profile": profile,
@@ -459,6 +479,7 @@ class AssessmentMixin:
             hot_tables=["orders", "order_items", "sessions", "user_events"],
             connection_count_avg=120,
             connection_count_peak=350,
+            workload_source="mock",
         )
 
     def _mock_discover_dynamodb(self, db_name: str) -> DatabaseProfile:
@@ -569,6 +590,7 @@ class AssessmentMixin:
             hot_tables=["Users", "Orders", "UserEvents", "Sessions"],
             connection_count_avg=80,
             connection_count_peak=250,
+            workload_source="mock",
         )
 
     def _mock_discover_cosmosdb(self, db_name: str) -> DatabaseProfile:
@@ -615,7 +637,8 @@ class AssessmentMixin:
                 "/configKey",
             ],
             cosmos_consistency_level="Session",
-            cosmos_change_feed_enabled=True,
+            cosmos_change_feed_enabled=False,
+            cosmos_change_feed_mode="LatestVersion",
             cosmos_multi_region_writes=False,
             cosmos_regions=["eastus"],
             cosmos_container_details=[
@@ -689,6 +712,7 @@ class AssessmentMixin:
             peak_qps=9_000,
             avg_tps=700,
             p99_latency_ms=12.0,
+            workload_source="mock",
             top_queries=[
                 {"query": "ReadItem: Users (userId)", "calls": 15_000_000, "mean_ms": 3.0},
                 {"query": "Query: Orders WHERE userId=@uid", "calls": 8_000_000, "mean_ms": 6.0},
@@ -1191,3 +1215,61 @@ class AssessmentMixin:
         except Exception as e:
             logger.error(f"Live workload profiling failed: {e}")
             return self._mock_workload()
+
+    def _live_discover_cosmosdb(
+        self, endpoint: str, database: str, user: str = "", password: str = ""
+    ) -> DatabaseProfile:
+        """Connect to a live Cosmos DB account and discover its schema/configuration."""
+        try:
+            from agents.provisioning.cosmos_adapter import CosmosDiscoveryAdapter
+        except ImportError:
+            logger.warning("azure-cosmos not installed - returning CosmosDB mock data")
+            return self._mock_discover_cosmosdb(database)
+
+        try:
+            adapter = CosmosDiscoveryAdapter(
+                endpoint=endpoint,
+                key=password,
+                database_name=database,
+            )
+            return adapter.discover()
+        except Exception as e:
+            logger.error(f"Live CosmosDB discover failed: {e}")
+            return self._mock_discover_cosmosdb(database)
+
+    def _live_workload_cosmosdb(self, profile_data: dict) -> WorkloadProfile:
+        """Build a heuristic workload profile from discovered CosmosDB container throughput data.
+
+        Workload metrics are estimated from provisioned RU/s, not observed usage.
+        The workload_source field is set to "heuristic" to surface this caveat.
+        """
+        profile = profile_data.get("_profile") if profile_data else None
+        if not profile or not profile.databases:
+            logger.warning("No profile data for CosmosDB workload - returning mock data")
+            return self._mock_workload_cosmosdb()
+
+        db = profile.databases[0]
+        total_ru = db.cosmos_ru_per_sec or 0
+        container_count = db.table_count or 1
+
+        avg_qps = total_ru * 0.7
+        avg_tps = total_ru * 0.3
+        peak_qps = avg_qps * 3
+        connection_avg = container_count * 8
+        connection_peak = container_count * 25
+
+        return WorkloadProfile(
+            total_queries=int(avg_qps * 86400),
+            total_calls=int((avg_qps + avg_tps) * 86400),
+            reads_pct=70.0,
+            writes_pct=30.0,
+            avg_qps=round(avg_qps, 1),
+            peak_qps=round(peak_qps, 1),
+            avg_tps=round(avg_tps, 1),
+            p99_latency_ms=10.0,
+            top_queries=[],
+            hot_tables=[],
+            connection_count_avg=int(connection_avg),
+            connection_count_peak=int(connection_peak),
+            workload_source="heuristic",
+        )

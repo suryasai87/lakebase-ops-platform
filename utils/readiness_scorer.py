@@ -23,9 +23,11 @@ from config.migration_profiles import (
     BlockerSeverity,
     DatabaseProfile,
     DimensionScore,
+    EnvironmentSizing,
     LakebaseTier,
     ReadinessCategory,
     WorkloadProfile,
+    max_connections_for_cu,
 )
 
 # Lakebase constraints
@@ -327,7 +329,7 @@ def compute_readiness_score(
         effort = _estimate_effort_nosql(db_profile, all_blockers)
     else:
         effort = _estimate_effort(db_profile, all_blockers, unsupported_exts)
-    tier, cu_min, cu_max = _recommend_sizing(db_profile, workload)
+    tier, cu_min, cu_max, env_sizing = _recommend_sizing(db_profile, workload)
 
     return AssessmentResult(
         overall_score=round(overall, 1),
@@ -341,6 +343,7 @@ def compute_readiness_score(
         recommended_tier=tier,
         recommended_cu_min=cu_min,
         recommended_cu_max=cu_max,
+        sizing_by_env=env_sizing,
     )
 
 
@@ -464,8 +467,24 @@ def _score_cosmosdb_features(db: DatabaseProfile) -> tuple[float, list[Blocker],
             )
             score -= 15
 
-    if db.cosmos_change_feed_enabled:
-        score -= 5
+    cf_mode = db.cosmos_change_feed_mode or ("LatestVersion" if db.cosmos_change_feed_enabled else None)
+    if cf_mode == "AllVersionsAndDeletes":
+        score -= 10
+        blockers.append(
+            Blocker(
+                category="feature_compatibility",
+                severity=BlockerSeverity.MEDIUM,
+                description="AllVersionsAndDeletes Change Feed mode active - downstream consumers need migration",
+                workaround="Use Lakeflow Connect or application-level event publishing",
+                effort_days=3,
+            )
+        )
+    elif cf_mode == "LatestVersion":
+        score -= 3
+        warnings.append(
+            "Change Feed (LatestVersion) is enabled by default on all Cosmos DB accounts; "
+            "verify whether any consumers depend on it before migration"
+        )
     if db.cosmos_multi_region_writes:
         score -= 15
         regions = db.cosmos_regions or []
@@ -533,17 +552,20 @@ def _score_cosmosdb_replication(db: DatabaseProfile) -> tuple[float, list[Blocke
     blockers = []
     score = 100
 
-    if db.cosmos_change_feed_enabled:
+    cf_mode = db.cosmos_change_feed_mode or ("LatestVersion" if db.cosmos_change_feed_enabled else None)
+    if cf_mode == "AllVersionsAndDeletes":
         blockers.append(
             Blocker(
                 category="replication",
                 severity=BlockerSeverity.MEDIUM,
-                description="Change Feed enabled - downstream consumers need migration to Lakebase CDC or application triggers",
+                description="AllVersionsAndDeletes Change Feed active - downstream consumers need migration to Lakebase CDC or application triggers",
                 workaround="Use Lakeflow Connect or application-level event publishing",
                 effort_days=3,
             )
         )
         score -= 15
+    elif cf_mode == "LatestVersion":
+        score -= 5
 
     if db.cosmos_multi_region_writes:
         regions = db.cosmos_regions or []
@@ -561,8 +583,9 @@ def _score_cosmosdb_replication(db: DatabaseProfile) -> tuple[float, list[Blocke
         score -= 10
 
     regions = db.cosmos_regions or []
+    cf_display = cf_mode or "unknown"
     details = (
-        f"Change Feed: {db.cosmos_change_feed_enabled}, "
+        f"Change Feed mode: {cf_display}, "
         f"Multi-region writes: {db.cosmos_multi_region_writes}, "
         f"Regions: {len(regions)}"
     )
@@ -999,35 +1022,107 @@ def _estimate_effort(db: DatabaseProfile, blockers: list[Blocker], unsupported_e
     return round(base_days, 1)
 
 
+def _snap_cu(cu: float) -> float:
+    """Snap a CU value to the nearest valid Lakebase CU size."""
+    valid = [0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 24, 28, 32]
+    best = valid[0]
+    for v in valid:
+        if v <= cu:
+            best = v
+        else:
+            if abs(v - cu) < abs(best - cu):
+                best = v
+            break
+    return best
+
+
 def _recommend_sizing(
     db: DatabaseProfile,
     workload: WorkloadProfile | None,
-) -> tuple[LakebaseTier, int, int]:
+) -> tuple[LakebaseTier, int, int, list[EnvironmentSizing]]:
+    """Return tier, prod cu_min/max (for backward compat), and per-env sizing."""
     size_gb = db.size_gb
+    tier = LakebaseTier.AUTOSCALING
 
-    tier = LakebaseTier.AUTOSCALING  # Default: autoscaling handles all sizes
+    # --- Derive prod CU from workload signals ---
+    # Lakebase allocates ~2 GB RAM per CU; memory-based sizing ensures the
+    # working set fits in memory for acceptable performance.
+    cu_from_connections = 1.0
+    cu_from_memory = 1.0
+    cu_from_qps = 1.0
 
     if workload and workload.connection_count_peak > 0:
-        if workload.connection_count_peak <= 200:
-            cu_min, cu_max = 1, 4
-        elif workload.connection_count_peak <= 800:
-            cu_min, cu_max = 2, 8
-        elif workload.connection_count_peak <= 1600:
-            cu_min, cu_max = 4, 16
-        else:
-            cu_min, cu_max = 8, 32
-    else:
-        if size_gb < 10:
-            cu_min, cu_max = 1, 4
-        elif size_gb < 100:
-            cu_min, cu_max = 2, 8
-        elif size_gb < 500:
-            cu_min, cu_max = 4, 16
-        else:
-            cu_min, cu_max = 8, 32
+        cu_from_connections = max(1, workload.connection_count_peak / 209)
 
-    if tier == LakebaseTier.PROVISIONED:
-        cu_min = max(cu_min, 1)
-        cu_max = min(cu_max, 8)
+    cu_from_memory = max(1, size_gb / 2)
 
-    return tier, cu_min, cu_max
+    if workload and workload.avg_qps > 0:
+        cu_from_qps = max(1, workload.avg_qps / 2000)
+
+    prod_target = max(cu_from_connections, cu_from_qps, cu_from_memory)
+    prod_min_raw = max(2, prod_target * 0.6)
+    prod_max_raw = max(prod_min_raw + 2, prod_target * 1.4)
+
+    prod_min_raw = min(prod_min_raw, 32)
+    prod_max_raw = min(prod_max_raw, 32)
+    if prod_max_raw - prod_min_raw > 16:
+        prod_max_raw = prod_min_raw + 16
+
+    prod_cu_min = _snap_cu(prod_min_raw)
+    prod_cu_max = _snap_cu(prod_max_raw)
+    if prod_cu_max <= prod_cu_min:
+        prod_cu_max = _snap_cu(prod_cu_min + 2)
+
+    # --- Dev: lightweight, scale-to-zero ---
+    dev_min = _snap_cu(max(0.5, prod_cu_min / 4))
+    dev_max = _snap_cu(max(dev_min + 1, prod_cu_min / 2))
+    if dev_max <= dev_min:
+        dev_max = _snap_cu(dev_min + 1)
+
+    # --- Staging: mirrors prod min, slightly lower max ---
+    stg_min = _snap_cu(max(1, prod_cu_min))
+    stg_max = _snap_cu(max(stg_min + 2, prod_cu_min + 4))
+    if stg_max <= stg_min:
+        stg_max = _snap_cu(stg_min + 2)
+    if stg_max - stg_min > 16:
+        stg_max = _snap_cu(stg_min + 16)
+
+    ha_recommended = prod_cu_max >= 8
+
+    env_sizing = [
+        EnvironmentSizing(
+            env="dev",
+            cu_min=dev_min,
+            cu_max=dev_max,
+            scale_to_zero=True,
+            autoscaling=True,
+            max_connections=max_connections_for_cu(dev_max),
+            ram_gb=dev_max * 2,
+            notes="Scale-to-zero after 15 min idle. Minimal footprint for development and testing.",
+        ),
+        EnvironmentSizing(
+            env="staging",
+            cu_min=stg_min,
+            cu_max=stg_max,
+            scale_to_zero=True,
+            autoscaling=True,
+            max_connections=max_connections_for_cu(stg_max),
+            ram_gb=stg_max * 2,
+            notes="Scale-to-zero after 30 min idle. Mirrors production sizing for integration testing.",
+        ),
+        EnvironmentSizing(
+            env="prod",
+            cu_min=prod_cu_min,
+            cu_max=prod_cu_max,
+            scale_to_zero=False,
+            autoscaling=True,
+            max_connections=max_connections_for_cu(prod_cu_max),
+            ram_gb=prod_cu_max * 2,
+            notes=(
+                f"Always-on. {'High availability recommended. ' if ha_recommended else ''}"
+                f"Working set ~{size_gb:.0f} GB."
+            ),
+        ),
+    ]
+
+    return tier, int(prod_cu_min), int(prod_cu_max), env_sizing
