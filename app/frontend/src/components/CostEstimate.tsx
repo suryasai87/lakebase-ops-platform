@@ -40,6 +40,11 @@ interface CostBreakdown {
   formulas?: Formulas;
 }
 
+interface PricingUrls {
+  source?: string;
+  lakebase?: string;
+}
+
 interface CostEstimateProps {
   source: CostBreakdown;
   lakebase: CostBreakdown;
@@ -49,7 +54,12 @@ interface CostEstimateProps {
   cuEstimate: number;
   region?: string;
   pricingVersion?: string;
+  pricingSource?: string;
+  tierLabel?: string;
+  skuName?: string;
   disclaimer?: string;
+  costDisclaimer?: string;
+  pricingUrls?: PricingUrls;
 }
 
 function fmt(n: number): string {
@@ -90,6 +100,11 @@ export default function CostEstimate({
   region,
   pricingVersion,
   disclaimer,
+  costDisclaimer,
+  pricingUrls,
+  pricingSource,
+  tierLabel,
+  skuName,
 }: CostEstimateProps) {
   const chartData = [
     {
@@ -111,7 +126,7 @@ export default function CostEstimate({
   return (
     <Card>
       <CardContent>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1, flexWrap: "wrap" }}>
           <Typography variant="subtitle1" fontWeight={600}>
             Cost Comparison (Monthly)
           </Typography>
@@ -121,11 +136,27 @@ export default function CostEstimate({
             size="small"
             color={isSaving ? "success" : "warning"}
           />
+          {tierLabel && <Chip label={tierLabel} size="small" color="primary" variant="outlined" />}
           {region && <Chip label={region} size="small" variant="outlined" />}
           {pricingVersion && (
             <Chip label={`rates: ${pricingVersion}`} size="small" variant="outlined" sx={{ opacity: 0.7 }} />
           )}
+          {pricingSource && pricingSource !== "static" && (
+            <Chip
+              label={pricingSource === "live" ? "live pricing" : "cached pricing"}
+              size="small"
+              color={pricingSource === "live" ? "success" : "default"}
+              variant="outlined"
+              sx={{ opacity: 0.8 }}
+            />
+          )}
         </Box>
+
+        {costDisclaimer && (
+          <Alert severity="warning" sx={{ mb: 2, py: 0.5, "& .MuiAlert-message": { fontSize: "0.8rem" } }}>
+            {costDisclaimer}
+          </Alert>
+        )}
 
         {disclaimer && (
           <Alert severity="info" sx={{ mb: 2, py: 0.25, "& .MuiAlert-message": { fontSize: "0.75rem" } }}>
@@ -155,7 +186,7 @@ export default function CostEstimate({
           <Box>
             <Box sx={{ display: "flex", alignItems: "center" }}>
               <Typography variant="caption" color="text.secondary">
-                Lakebase
+                {lakebase.label}
               </Typography>
               {lakebase.formulas?.compute && (
                 <FormulaChip formula={lakebase.formulas.compute} label="Lakebase Compute Formula" />
@@ -166,7 +197,7 @@ export default function CostEstimate({
             </Typography>
             {lakebase.rates?.dbu_per_hour != null && (
               <Typography variant="caption" color="text.secondary" sx={{ fontSize: "0.65rem" }}>
-                ~{lakebase.rates.dbu_per_hour} DBU/hr @ {fmtRate(lakebase.rates.dbu_rate)}/DBU
+                ~{lakebase.rates.dbu_per_hour} DBU/hr @ {fmtRate(lakebase.rates.dbu_rate)}/DBU ({tierLabel || "Premium"})
               </Typography>
             )}
           </Box>
@@ -236,7 +267,7 @@ export default function CostEstimate({
 
           <Box>
             <Typography variant="caption" color="text.secondary" fontWeight={600}>
-              Lakebase Rates
+              Lakebase Rates ({tierLabel || "Premium"})
             </Typography>
             <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
               <Typography variant="caption" color="text.secondary">
@@ -254,6 +285,11 @@ export default function CostEstimate({
                 <FormulaChip formula={lakebase.formulas.storage} label="Storage" />
               )}
             </Box>
+            {skuName && (
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: "0.6rem", mt: 0.5, opacity: 0.7 }}>
+                SKU: {skuName}
+              </Typography>
+            )}
           </Box>
 
           <Box>
@@ -264,20 +300,23 @@ export default function CostEstimate({
               {sizeGb.toFixed(1)} GB storage, ~{cuEstimate} CU
             </Typography>
             <Typography variant="caption" color="text.secondary" display="block">
-              730 hrs/month, on-demand pricing
+              730 hrs/month, on-demand list pricing
+            </Typography>
+            <Typography variant="caption" color="text.secondary" display="block">
+              1 DBU/CU/hr (Database Serverless Compute)
             </Typography>
           </Box>
         </Box>
 
         {/* Pricing source links */}
         <Box sx={{ display: "flex", gap: 2, mt: 1 }}>
-          {source.source_url && (
-            <Link href={source.source_url} target="_blank" rel="noopener" variant="caption" sx={{ fontSize: "0.65rem" }}>
+          {(source.source_url || pricingUrls?.source) && (
+            <Link href={source.source_url || pricingUrls?.source} target="_blank" rel="noopener" variant="caption" sx={{ fontSize: "0.65rem" }}>
               {source.label} pricing page
             </Link>
           )}
-          {lakebase.source_url && (
-            <Link href={lakebase.source_url} target="_blank" rel="noopener" variant="caption" sx={{ fontSize: "0.65rem" }}>
+          {(lakebase.source_url || pricingUrls?.lakebase) && (
+            <Link href={lakebase.source_url || pricingUrls?.lakebase} target="_blank" rel="noopener" variant="caption" sx={{ fontSize: "0.65rem" }}>
               Lakebase pricing page
             </Link>
           )}

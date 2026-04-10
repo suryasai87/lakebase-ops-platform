@@ -75,6 +75,8 @@ class DiscoverRequest(BaseModel):
     mock: bool = True
     source_user: str = ""
     source_password: str = ""
+    subscription_id: str = ""
+    resource_group: str = ""
 
 
 class ProfileRequest(BaseModel):
@@ -119,6 +121,8 @@ def discover(req: DiscoverRequest):
         mock=req.mock,
         source_user=req.source_user,
         source_password=req.source_password,
+        subscription_id=req.subscription_id,
+        resource_group=req.resource_group,
     )
     pid = result.get("profile_id", "")
     if pid:
@@ -172,8 +176,6 @@ def assess_readiness(req: ReadinessRequest):
     dims = result.get("dimensions", {})
     dimension_scores = {k: v["score"] for k, v in dims.items()} if dims else {}
 
-    warnings = result.get("unsupported_extensions", [])
-
     return {
         "overall_score": result.get("overall_score"),
         "category": result.get("category"),
@@ -186,7 +188,8 @@ def assess_readiness(req: ReadinessRequest):
         "unsupported_extensions": result.get("unsupported_extensions", []),
         "dimension_scores": dimension_scores,
         "blockers": result.get("blockers", []),
-        "warnings": warnings,
+        "warnings": result.get("warnings", []),
+        "sizing_by_env": result.get("sizing_by_env", []),
     }
 
 
@@ -283,7 +286,20 @@ def assessment_extension_matrix(profile_id: str):
 
     matrix = []
 
-    if is_nosql:
+    if is_nosql and engine == "cosmosdb-nosql":
+        from utils.readiness_scorer import COSMOSDB_FEATURE_SUPPORT, COSMOSDB_FEATURE_WORKAROUNDS
+
+        for feature, status in COSMOSDB_FEATURE_SUPPORT.items():
+            workaround = COSMOSDB_FEATURE_WORKAROUNDS.get(feature, "")
+            matrix.append(
+                {
+                    "name": feature,
+                    "version": "",
+                    "status": status,
+                    "workaround": workaround,
+                }
+            )
+    elif is_nosql:
         from utils.readiness_scorer import DYNAMODB_FEATURE_SUPPORT, DYNAMODB_FEATURE_WORKAROUNDS
 
         for feature, status in DYNAMODB_FEATURE_SUPPORT.items():
@@ -340,17 +356,25 @@ def assessment_regions(engine: str):
 
 
 @router.get("/cost-estimate/{profile_id}", operation_id="assessment_cost_estimate")
-def assessment_cost_estimate(profile_id: str):
-    """Estimate monthly cost: source cloud DB vs Lakebase DBU pricing."""
+def assessment_cost_estimate(profile_id: str, tier: str = "premium"):
+    """Estimate monthly cost: source cloud DB vs Lakebase DBU pricing.
+
+    Query params:
+        tier: "premium" or "enterprise" (default: premium)
+    """
     from config.pricing import (
         HOURS_PER_MONTH,
+        LAKEBASE_COST_DISCLAIMER,
+        LAKEBASE_DBU_PER_CU_HOUR,
         LAKEBASE_PRICING,
         PRICING_DISCLAIMER,
         PRICING_VERSION,
         SOURCE_ENGINES,
         get_lakebase_rates,
-        get_source_rates,
     )
+
+    if tier not in ("premium", "enterprise"):
+        tier = "premium"
 
     cached = _profiles.get(profile_id)
     if not cached:
@@ -366,53 +390,142 @@ def assessment_cost_estimate(profile_id: str):
     size_gb = db.size_gb
 
     engine_cfg = SOURCE_ENGINES.get(engine, SOURCE_ENGINES["aurora-postgresql"])
-    src_rates = get_source_rates(engine, region)
-    lb_rates = get_lakebase_rates(engine, region)
+
+    src_rates, pricing_source = _get_live_rates(engine, region)
+
+    lb_rates = get_lakebase_rates(engine, region, tier=tier)
 
     workload = profile_obj.workload
     avg_qps = workload.avg_qps if workload else 1000
     avg_connections = workload.connection_count_avg if workload else 50
 
-    cu_estimate = max(1, min(32, avg_connections / 50))
+    assessment_obj = cached.get("_assessment")
+    if assessment_obj and hasattr(assessment_obj, "recommended_cu_min") and assessment_obj.recommended_cu_min > 0:
+        cu_estimate = (assessment_obj.recommended_cu_min + assessment_obj.recommended_cu_max) / 2
+    else:
+        cu_estimate = max(1, min(128, avg_connections / 209))
 
-    source_compute = src_rates["compute_per_hour"] * HOURS_PER_MONTH
-    source_storage = src_rates["storage_per_gb_month"] * size_gb
-    source_io = src_rates["io_per_million"] * (avg_qps * 2_592_000 / 1_000_000) if src_rates["io_per_million"] else 0
-    source_total = source_compute + source_storage + source_io
+    is_cosmosdb = engine == "cosmosdb-nosql"
+    is_dynamodb = engine == "dynamodb"
+    if is_cosmosdb:
+        cosmos_cost = _estimate_cosmosdb_cost(db, src_rates, size_gb, region)
+        source_compute = cosmos_cost["compute"]
+        source_storage = cosmos_cost["storage"]
+        source_io = cosmos_cost["backup"]
+        source_total = cosmos_cost["total"]
+    elif is_dynamodb:
+        reads_pct = workload.reads_pct if workload and workload.reads_pct else 70.0
+        writes_pct = workload.writes_pct if workload and workload.writes_pct else 30.0
+        read_qps = avg_qps * (reads_pct / 100.0)
+        write_qps = avg_qps * (writes_pct / 100.0)
+        seconds_per_month = 2_592_000
+        wru_rate = src_rates.get("wru_per_million", 1.25)
+        rru_rate = src_rates.get("rru_per_million", 0.25)
+        source_compute = 0.0
+        source_storage = src_rates["storage_per_gb_month"] * size_gb
+        source_io = (
+            (write_qps * seconds_per_month / 1_000_000) * wru_rate
+            + (read_qps * seconds_per_month / 1_000_000) * rru_rate
+        )
+        source_total = source_compute + source_storage + source_io
+    else:
+        source_compute = src_rates["compute_per_hour"] * HOURS_PER_MONTH
+        source_storage = src_rates["storage_per_gb_month"] * size_gb
+        source_io = (
+            src_rates["io_per_million"] * (avg_qps * 2_592_000 / 1_000_000) if src_rates["io_per_million"] else 0
+        )
+        source_total = source_compute + source_storage + source_io
 
-    lakebase_dbu_per_hour = cu_estimate * 2
+    lakebase_dbu_per_hour = cu_estimate * LAKEBASE_DBU_PER_CU_HOUR
     lakebase_compute = lakebase_dbu_per_hour * lb_rates["dbu_rate"] * HOURS_PER_MONTH
     lakebase_storage = lb_rates["storage_dsu_per_gb_month"] * size_gb
     lakebase_total = lakebase_compute + lakebase_storage
 
     savings_pct = round((1 - lakebase_total / source_total) * 100, 1) if source_total > 0 else 0
 
-    return {
+    pricing_urls = {
+        "source": engine_cfg["source_url"],
+        "lakebase": LAKEBASE_PRICING["source_url"],
+    }
+
+    tier_label = LAKEBASE_PRICING["tiers"][tier]["label"]
+    sku_name = LAKEBASE_PRICING["sku_pattern"].replace(
+        "{PREMIUM|ENTERPRISE}", tier.upper()
+    ).replace("{REGION}", region.upper().replace("-", "_"))
+
+    # --- Environment cost breakdown ---
+    env_costs = []
+    if assessment_obj and hasattr(assessment_obj, "sizing_by_env"):
+        for es in assessment_obj.sizing_by_env:
+            avg_cu = (es.cu_min + es.cu_max) / 2
+            env_compute = avg_cu * LAKEBASE_DBU_PER_CU_HOUR * lb_rates["dbu_rate"] * HOURS_PER_MONTH
+            env_storage = lb_rates["storage_dsu_per_gb_month"] * size_gb
+            if es.scale_to_zero:
+                utilization = 0.35 if es.env == "dev" else 0.60
+                env_compute *= utilization
+            env_total = env_compute + env_storage
+            env_costs.append({
+                "env": es.env,
+                "cu_min": es.cu_min,
+                "cu_max": es.cu_max,
+                "avg_cu": round(avg_cu, 1),
+                "scale_to_zero": es.scale_to_zero,
+                "compute": round(env_compute, 2),
+                "storage": round(env_storage, 2),
+                "total": round(env_total, 2),
+                "notes": es.notes,
+            })
+
+    lakebase_staleness = None
+    try:
+        from config.pricing_fetcher import check_lakebase_pricing_staleness
+        lakebase_staleness = check_lakebase_pricing_staleness()
+    except Exception:
+        logger.debug("Could not check Lakebase pricing staleness", exc_info=True)
+
+    workload_source = workload.workload_source if workload and hasattr(workload, "workload_source") else "observed"
+    workload_caveat = None
+    if workload_source == "heuristic":
+        workload_caveat = (
+            "Workload metrics are estimated from provisioned throughput, not observed usage. "
+            "Actual QPS/TPS may differ significantly."
+        )
+    elif workload_source == "mock":
+        workload_caveat = "Workload metrics are synthetic mock data for demonstration purposes."
+
+    result = {
         "profile_id": profile_id,
         "engine": engine,
         "region": region,
         "size_gb": round(size_gb, 1),
         "cu_estimate": round(cu_estimate, 1),
+        "tier": tier,
+        "tier_label": tier_label,
+        "sku_name": sku_name,
         "pricing_version": PRICING_VERSION,
+        "pricing_source": pricing_source,
+        "workload_source": workload_source,
         "disclaimer": PRICING_DISCLAIMER,
+        "cost_disclaimer": LAKEBASE_COST_DISCLAIMER,
+        "pricing_urls": pricing_urls,
         "source": {
             "label": engine_cfg["label"],
             "instance_ref": engine_cfg["instance_ref"],
             "source_url": engine_cfg["source_url"],
+            "confidence": engine_cfg.get("confidence", "estimated"),
+            "last_verified": engine_cfg.get("last_verified", PRICING_VERSION),
             "compute": round(source_compute, 2),
             "storage": round(source_storage, 2),
             "io": round(source_io, 2),
             "total": round(source_total, 2),
-            "rates": {
-                "compute_per_hour": src_rates["compute_per_hour"],
-                "storage_per_gb_month": src_rates["storage_per_gb_month"],
-                "io_per_million": src_rates["io_per_million"],
-            },
+            "rates": _build_source_rates_dict(src_rates, engine),
             "formulas": engine_cfg["formulas"],
         },
         "lakebase": {
-            "label": "Databricks Lakebase",
+            "label": f"Databricks Lakebase ({tier_label})",
             "source_url": LAKEBASE_PRICING["source_url"],
+            "pricing_source": "static",
+            "pricing_version": PRICING_VERSION,
             "compute": round(lakebase_compute, 2),
             "storage": round(lakebase_storage, 2),
             "total": round(lakebase_total, 2),
@@ -425,6 +538,125 @@ def assessment_cost_estimate(profile_id: str):
         },
         "savings_pct": savings_pct,
         "savings_monthly": round(source_total - lakebase_total, 2),
+    }
+
+    if workload_caveat:
+        result["workload_caveat"] = workload_caveat
+
+    if env_costs:
+        result["env_cost_breakdown"] = env_costs
+
+    if is_cosmosdb:
+        result["cosmos_cost_detail"] = cosmos_cost
+
+    committed_discounts = LAKEBASE_PRICING.get("committed_use_discounts")
+    if committed_discounts:
+        result["committed_use_discounts"] = {
+            "1_year": {
+                "discount_pct": committed_discounts["1_year"]["discount_pct"],
+                "label": committed_discounts["1_year"]["label"],
+                "estimated_total": round(lakebase_total * (1 - committed_discounts["1_year"]["discount_pct"] / 100), 2),
+            },
+            "3_year": {
+                "discount_pct": committed_discounts["3_year"]["discount_pct"],
+                "label": committed_discounts["3_year"]["label"],
+                "estimated_total": round(lakebase_total * (1 - committed_discounts["3_year"]["discount_pct"] / 100), 2),
+            },
+            "note": committed_discounts["note"],
+        }
+
+    if lakebase_staleness:
+        result["lakebase_staleness_warning"] = lakebase_staleness
+
+    return result
+
+
+def _build_source_rates_dict(src_rates: dict, engine: str) -> dict:
+    """Build the rates dict for the response, including DynamoDB-specific fields."""
+    rates = {
+        "compute_per_hour": src_rates.get("compute_per_hour", 0),
+        "storage_per_gb_month": src_rates.get("storage_per_gb_month", 0),
+        "io_per_million": src_rates.get("io_per_million", 0),
+    }
+    if engine == "dynamodb":
+        rates["wru_per_million"] = src_rates.get("wru_per_million", 1.25)
+        rates["rru_per_million"] = src_rates.get("rru_per_million", 0.25)
+    return rates
+
+
+def _get_live_rates(engine: str, region: str) -> tuple[dict, str]:
+    """Try live/cached pricing, fall back to static for all engines."""
+    try:
+        from config.pricing_fetcher import get_live_source_rates
+        return get_live_source_rates(engine, region)
+    except Exception:
+        from config.pricing import get_source_rates
+        return get_source_rates(engine, region), "static"
+
+
+def _estimate_cosmosdb_cost(db, src_rates: dict, size_gb: float, region: str) -> dict:
+    """
+    Detailed CosmosDB cost model accounting for multi-region, autoscale, and backup.
+    """
+    from config.pricing import HOURS_PER_MONTH
+
+    ru_per_sec = db.cosmos_ru_per_sec or 1000
+    ru_rate_per_100 = src_rates.get("compute_per_hour", 0.008)
+    storage_rate = src_rates.get("storage_per_gb_month", 0.25)
+
+    is_autoscale = db.cosmos_throughput_mode == "autoscale"
+    if is_autoscale:
+        max_ru = db.cosmos_autoscale_max_ru or ru_per_sec
+        effective_ru = max(max_ru * 0.1, max_ru * 0.6)
+    else:
+        effective_ru = ru_per_sec
+
+    base_compute = (effective_ru / 100) * ru_rate_per_100 * HOURS_PER_MONTH
+
+    num_regions = len(db.cosmos_regions) if db.cosmos_regions else 1
+    multi_write = db.cosmos_multi_region_writes or False
+    if multi_write and num_regions > 1:
+        region_multiplier = num_regions
+    elif num_regions > 1:
+        region_multiplier = 1 + (num_regions - 1) * 0.5
+    else:
+        region_multiplier = 1.0
+
+    compute_total = base_compute * region_multiplier
+
+    storage_total = storage_rate * size_gb * max(num_regions, 1)
+
+    backup_policy = db.cosmos_backup_policy or "periodic"
+    backup_cost = 0.20 * size_gb if backup_policy == "continuous" else 0.0
+
+    total = compute_total + storage_total + backup_cost
+
+    reserved_rate = None
+    try:
+        from config.pricing_fetcher import fetch_cosmosdb_reserved_rate
+        reserved_rate = fetch_cosmosdb_reserved_rate(region)
+    except Exception:
+        logger.debug("Could not fetch CosmosDB reserved rate", exc_info=True)
+
+    reserved_compute = None
+    reserved_savings_pct = None
+    if reserved_rate and reserved_rate > 0:
+        reserved_compute = (effective_ru / 100) * reserved_rate * HOURS_PER_MONTH * region_multiplier
+        reserved_savings_pct = round((1 - reserved_compute / compute_total) * 100, 1) if compute_total > 0 else 0
+
+    return {
+        "compute": round(compute_total, 2),
+        "storage": round(storage_total, 2),
+        "backup": round(backup_cost, 2),
+        "total": round(total, 2),
+        "effective_ru_per_sec": round(effective_ru, 0),
+        "region_multiplier": region_multiplier,
+        "num_regions": num_regions,
+        "multi_region_writes": multi_write,
+        "throughput_mode": db.cosmos_throughput_mode or "provisioned",
+        "backup_policy": backup_policy,
+        "reserved_1yr_compute": round(reserved_compute, 2) if reserved_compute else None,
+        "reserved_1yr_savings_pct": reserved_savings_pct,
     }
 
 

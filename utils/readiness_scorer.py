@@ -23,9 +23,11 @@ from config.migration_profiles import (
     BlockerSeverity,
     DatabaseProfile,
     DimensionScore,
+    EnvironmentSizing,
     LakebaseTier,
     ReadinessCategory,
     WorkloadProfile,
+    max_connections_for_cu,
 )
 
 # Lakebase constraints
@@ -144,6 +146,37 @@ DYNAMODB_FEATURE_WORKAROUNDS: dict[str, str] = {
 }
 
 
+COSMOSDB_FEATURE_SUPPORT: dict[str, str] = {
+    "Transactions (multi-document ACID)": "supported",
+    "Conditional operations (ETag-based)": "supported",
+    "Batch operations (TransactionalBatch)": "supported",
+    "TTL (time-to-live)": "supported",
+    "Encryption at rest": "supported",
+    "RBAC (Entra ID / data-plane)": "supported",
+    "Change Feed": "workaround",
+    "Multi-region writes": "workaround",
+    "Consistency levels (Session/Eventual)": "workaround",
+    "Stored procedures / UDFs (JavaScript)": "workaround",
+    "Hierarchical partition keys": "workaround",
+    "Integrated cache": "unsupported",
+    "Synapse Link": "unsupported",
+    "Materialized views (CosmosDB)": "unsupported",
+    "Per-partition throughput redistribution": "unsupported",
+}
+
+COSMOSDB_FEATURE_WORKAROUNDS: dict[str, str] = {
+    "Change Feed": "Use Lakeflow Connect CDC, application-level triggers, or pg_notify for change capture",
+    "Multi-region writes": "Use single-region Lakebase primary with Databricks DR strategy",
+    "Consistency levels (Session/Eventual)": "Map to PostgreSQL transaction isolation levels (READ COMMITTED, SERIALIZABLE)",
+    "Stored procedures / UDFs (JavaScript)": "Rewrite as PostgreSQL PL/pgSQL functions or move logic to application layer",
+    "Hierarchical partition keys": "Model as composite primary keys or multi-column indexes in PostgreSQL",
+    "Integrated cache": "Use application-level caching (Redis, Memcached) or PostgreSQL materialized views",
+    "Synapse Link": "Use Databricks Unity Catalog + Delta Lake for analytical workloads",
+    "Materialized views (CosmosDB)": "Use PostgreSQL materialized views with REFRESH CONCURRENTLY",
+    "Per-partition throughput redistribution": "Not applicable; Lakebase uses CU-based autoscaling",
+}
+
+
 def compute_readiness_score(
     db_profile: DatabaseProfile,
     workload: WorkloadProfile | None = None,
@@ -177,7 +210,9 @@ def compute_readiness_score(
 
     # ── Dimension 2: Extensions (weight 0.20) ───────────────────────────
 
-    if is_nosql:
+    if source_engine == "cosmosdb-nosql":
+        ext_score, ext_blockers, ext_warnings, sup, unsup = _score_cosmosdb_features(db_profile)
+    elif is_nosql:
         ext_score, ext_blockers, ext_warnings, sup, unsup = _score_dynamodb_features(db_profile)
     else:
         ext_score, ext_blockers, ext_warnings, sup, unsup = _score_extensions(db_profile)
@@ -213,7 +248,11 @@ def compute_readiness_score(
 
     # ── Dimension 4: Schema Complexity (weight 0.15) ────────────────────
 
-    if is_nosql:
+    if source_engine == "cosmosdb-nosql":
+        complexity_score, complexity_blockers, complexity_warnings, complexity_details = _score_cosmosdb_complexity(
+            db_profile
+        )
+    elif is_nosql:
         complexity_score, complexity_blockers, complexity_warnings, complexity_details = _score_nosql_complexity(
             db_profile
         )
@@ -234,7 +273,9 @@ def compute_readiness_score(
 
     # ── Dimension 5: Replication & HA (weight 0.15) ─────────────────────
 
-    if is_nosql:
+    if source_engine == "cosmosdb-nosql":
+        repl_score, repl_blockers, repl_details = _score_cosmosdb_replication(db_profile)
+    elif is_nosql:
         repl_score, repl_blockers, repl_details = _score_nosql_replication(db_profile)
     else:
         repl_score, repl_blockers, repl_details = _score_replication(db_profile)
@@ -252,7 +293,9 @@ def compute_readiness_score(
 
     # ── Dimension 6: Operational Readiness (weight 0.15) ────────────────
 
-    if is_nosql:
+    if source_engine == "cosmosdb-nosql":
+        ops_score, ops_warnings, ops_details = _score_cosmosdb_operational(db_profile, workload)
+    elif is_nosql:
         ops_score, ops_warnings, ops_details = _score_nosql_operational(db_profile, workload)
     else:
         ops_score, ops_warnings, ops_details = _score_operational(db_profile, workload)
@@ -286,7 +329,7 @@ def compute_readiness_score(
         effort = _estimate_effort_nosql(db_profile, all_blockers)
     else:
         effort = _estimate_effort(db_profile, all_blockers, unsupported_exts)
-    tier, cu_min, cu_max = _recommend_sizing(db_profile, workload)
+    tier, cu_min, cu_max, env_sizing = _recommend_sizing(db_profile, workload)
 
     return AssessmentResult(
         overall_score=round(overall, 1),
@@ -300,6 +343,7 @@ def compute_readiness_score(
         recommended_tier=tier,
         recommended_cu_min=cu_min,
         recommended_cu_max=cu_max,
+        sizing_by_env=env_sizing,
     )
 
 
@@ -383,6 +427,196 @@ def _score_dynamodb_features(db: DatabaseProfile) -> tuple[float, list[Blocker],
         )
 
     return max(0, round(score, 1)), blockers, warnings, supported, unsupported
+
+
+def _score_cosmosdb_features(db: DatabaseProfile) -> tuple[float, list[Blocker], list[str], list[str], list[str]]:
+    """Score Azure Cosmos DB feature compatibility with Lakebase."""
+    blockers = []
+    warnings = []
+    supported = []
+    unsupported = []
+    score = 100
+
+    for feature, status in COSMOSDB_FEATURE_SUPPORT.items():
+        if status == "supported":
+            supported.append(feature)
+        elif status == "workaround":
+            wk = COSMOSDB_FEATURE_WORKAROUNDS.get(feature, "Evaluate manually")
+            warnings.append(f"'{feature}' requires workaround: {wk}")
+            unsupported.append(feature)
+            blockers.append(
+                Blocker(
+                    category="feature_compatibility",
+                    severity=BlockerSeverity.MEDIUM,
+                    description=f"Cosmos DB feature '{feature}' not natively available in Lakebase",
+                    workaround=wk,
+                    effort_days=2,
+                )
+            )
+            score -= 8
+        else:
+            unsupported.append(feature)
+            blockers.append(
+                Blocker(
+                    category="feature_compatibility",
+                    severity=BlockerSeverity.HIGH,
+                    description=f"Cosmos DB feature '{feature}' not supported in Lakebase",
+                    workaround=COSMOSDB_FEATURE_WORKAROUNDS.get(feature, "Evaluate manually"),
+                    effort_days=3,
+                )
+            )
+            score -= 15
+
+    cf_mode = db.cosmos_change_feed_mode or ("LatestVersion" if db.cosmos_change_feed_enabled else None)
+    if cf_mode == "AllVersionsAndDeletes":
+        score -= 10
+        blockers.append(
+            Blocker(
+                category="feature_compatibility",
+                severity=BlockerSeverity.MEDIUM,
+                description="AllVersionsAndDeletes Change Feed mode active - downstream consumers need migration",
+                workaround="Use Lakeflow Connect or application-level event publishing",
+                effort_days=3,
+            )
+        )
+    elif cf_mode == "LatestVersion":
+        score -= 3
+        warnings.append(
+            "Change Feed (LatestVersion) is enabled by default on all Cosmos DB accounts; "
+            "verify whether any consumers depend on it before migration"
+        )
+    if db.cosmos_multi_region_writes:
+        score -= 15
+        regions = db.cosmos_regions or []
+        blockers.append(
+            Blocker(
+                category="feature_compatibility",
+                severity=BlockerSeverity.HIGH,
+                description=f"Multi-region writes active across {len(regions)} region(s) - not supported in Lakebase",
+                workaround="Consolidate to single-region Lakebase with DR strategy",
+                effort_days=5,
+            )
+        )
+    if db.cosmos_consistency_level and db.cosmos_consistency_level in ("Strong", "BoundedStaleness"):
+        score -= 5
+        warnings.append(
+            f"Cosmos DB consistency level '{db.cosmos_consistency_level}' has no direct Lakebase equivalent; "
+            "use PostgreSQL SERIALIZABLE isolation for strongest guarantees"
+        )
+
+    return max(0, round(score, 1)), blockers, warnings, supported, unsupported
+
+
+def _score_cosmosdb_complexity(db: DatabaseProfile) -> tuple[float, list[Blocker], list[str], str]:
+    """Score Cosmos DB schema complexity for relational conversion."""
+    blockers = []
+    warnings = []
+    score = 100
+
+    container_count = db.table_count
+    if container_count > 15:
+        score -= 10
+        warnings.append(f"{container_count} containers require careful relational schema design")
+    elif container_count > 8:
+        score -= 5
+
+    partition_keys = db.cosmos_partition_key_paths or []
+    unique_keys = set(partition_keys)
+    if len(unique_keys) > 8:
+        score -= 5
+        warnings.append(f"{len(unique_keys)} distinct partition key paths increase mapping complexity")
+
+    details_list = db.cosmos_container_details or []
+    cross_partition_risk = sum(1 for c in details_list if c.get("indexing_policy") == "none")
+    if cross_partition_risk > 0:
+        score -= 5
+        warnings.append(f"{cross_partition_risk} container(s) with no indexing - cross-partition queries may be heavy")
+
+    # Baseline penalty for NoSQL-to-relational schema redesign overhead
+    score -= 15
+
+    details_parts = [f"{container_count} containers"]
+    if partition_keys:
+        details_parts.append(f"{len(unique_keys)} unique partition keys")
+    if db.cosmos_throughput_mode:
+        details_parts.append(f"throughput: {db.cosmos_throughput_mode}")
+    if db.cosmos_ru_per_sec:
+        details_parts.append(f"{db.cosmos_ru_per_sec:,} RU/s")
+
+    details = ", ".join(details_parts) if details_parts else "Standard Cosmos DB schema"
+    return max(0, round(score, 1)), blockers, warnings, details
+
+
+def _score_cosmosdb_replication(db: DatabaseProfile) -> tuple[float, list[Blocker], str]:
+    """Score Cosmos DB Change Feed and multi-region for migration impact."""
+    blockers = []
+    score = 100
+
+    cf_mode = db.cosmos_change_feed_mode or ("LatestVersion" if db.cosmos_change_feed_enabled else None)
+    if cf_mode == "AllVersionsAndDeletes":
+        blockers.append(
+            Blocker(
+                category="replication",
+                severity=BlockerSeverity.MEDIUM,
+                description="AllVersionsAndDeletes Change Feed active - downstream consumers need migration to Lakebase CDC or application triggers",
+                workaround="Use Lakeflow Connect or application-level event publishing",
+                effort_days=3,
+            )
+        )
+        score -= 15
+    elif cf_mode == "LatestVersion":
+        score -= 5
+
+    if db.cosmos_multi_region_writes:
+        regions = db.cosmos_regions or []
+        score -= 20
+        blockers.append(
+            Blocker(
+                category="replication",
+                severity=BlockerSeverity.HIGH,
+                description=f"Multi-region writes across {len(regions)} region(s) - Lakebase is single-region primary",
+                workaround="Consolidate writes to single region; use Databricks DR for failover",
+                effort_days=5,
+            )
+        )
+    elif db.cosmos_regions and len(db.cosmos_regions) > 1:
+        score -= 10
+
+    regions = db.cosmos_regions or []
+    cf_display = cf_mode or "unknown"
+    details = (
+        f"Change Feed mode: {cf_display}, "
+        f"Multi-region writes: {db.cosmos_multi_region_writes}, "
+        f"Regions: {len(regions)}"
+    )
+    return max(0, round(score, 1)), blockers, details
+
+
+def _score_cosmosdb_operational(db: DatabaseProfile, workload: WorkloadProfile | None) -> tuple[float, list[str], str]:
+    """Score Cosmos DB operational dependencies for migration."""
+    warnings = []
+    score = 100
+
+    if db.cosmos_throughput_mode == "provisioned":
+        warnings.append("Provisioned throughput mode requires capacity planning for Lakebase CU sizing")
+        score -= 5
+
+    if db.cosmos_consistency_level and db.cosmos_consistency_level != "Session":
+        warnings.append(
+            f"Non-default consistency level '{db.cosmos_consistency_level}' requires "
+            "careful PostgreSQL isolation level mapping"
+        )
+        score -= 5
+
+    # Baseline penalty for SDK-to-SQL rewrite and operational tooling changes
+    score -= 10
+
+    if workload and workload.avg_tps > LAKEBASE_MAX_SUSTAINED_TPS:
+        warnings.append(f"Write throughput ({workload.avg_tps:,.0f} TPS) may exceed Lakebase sustained capacity")
+        score -= 15
+
+    details = f"{len(warnings)} operational considerations" if warnings else "No operational concerns"
+    return max(0, round(score, 1)), warnings, details
 
 
 def _score_nosql_complexity(db: DatabaseProfile) -> tuple[float, list[Blocker], list[str], str]:
@@ -788,35 +1022,107 @@ def _estimate_effort(db: DatabaseProfile, blockers: list[Blocker], unsupported_e
     return round(base_days, 1)
 
 
+def _snap_cu(cu: float) -> float:
+    """Snap a CU value to the nearest valid Lakebase CU size."""
+    valid = [0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 24, 28, 32]
+    best = valid[0]
+    for v in valid:
+        if v <= cu:
+            best = v
+        else:
+            if abs(v - cu) < abs(best - cu):
+                best = v
+            break
+    return best
+
+
 def _recommend_sizing(
     db: DatabaseProfile,
     workload: WorkloadProfile | None,
-) -> tuple[LakebaseTier, int, int]:
+) -> tuple[LakebaseTier, int, int, list[EnvironmentSizing]]:
+    """Return tier, prod cu_min/max (for backward compat), and per-env sizing."""
     size_gb = db.size_gb
+    tier = LakebaseTier.AUTOSCALING
 
-    tier = LakebaseTier.AUTOSCALING  # Default: autoscaling handles all sizes
+    # --- Derive prod CU from workload signals ---
+    # Lakebase allocates ~2 GB RAM per CU; memory-based sizing ensures the
+    # working set fits in memory for acceptable performance.
+    cu_from_connections = 1.0
+    cu_from_memory = 1.0
+    cu_from_qps = 1.0
 
     if workload and workload.connection_count_peak > 0:
-        if workload.connection_count_peak <= 200:
-            cu_min, cu_max = 1, 4
-        elif workload.connection_count_peak <= 800:
-            cu_min, cu_max = 2, 8
-        elif workload.connection_count_peak <= 1600:
-            cu_min, cu_max = 4, 16
-        else:
-            cu_min, cu_max = 8, 32
-    else:
-        if size_gb < 10:
-            cu_min, cu_max = 1, 4
-        elif size_gb < 100:
-            cu_min, cu_max = 2, 8
-        elif size_gb < 500:
-            cu_min, cu_max = 4, 16
-        else:
-            cu_min, cu_max = 8, 32
+        cu_from_connections = max(1, workload.connection_count_peak / 209)
 
-    if tier == LakebaseTier.PROVISIONED:
-        cu_min = max(cu_min, 1)
-        cu_max = min(cu_max, 8)
+    cu_from_memory = max(1, size_gb / 2)
 
-    return tier, cu_min, cu_max
+    if workload and workload.avg_qps > 0:
+        cu_from_qps = max(1, workload.avg_qps / 2000)
+
+    prod_target = max(cu_from_connections, cu_from_qps, cu_from_memory)
+    prod_min_raw = max(2, prod_target * 0.6)
+    prod_max_raw = max(prod_min_raw + 2, prod_target * 1.4)
+
+    prod_min_raw = min(prod_min_raw, 32)
+    prod_max_raw = min(prod_max_raw, 32)
+    if prod_max_raw - prod_min_raw > 16:
+        prod_max_raw = prod_min_raw + 16
+
+    prod_cu_min = _snap_cu(prod_min_raw)
+    prod_cu_max = _snap_cu(prod_max_raw)
+    if prod_cu_max <= prod_cu_min:
+        prod_cu_max = _snap_cu(prod_cu_min + 2)
+
+    # --- Dev: lightweight, scale-to-zero ---
+    dev_min = _snap_cu(max(0.5, prod_cu_min / 4))
+    dev_max = _snap_cu(max(dev_min + 1, prod_cu_min / 2))
+    if dev_max <= dev_min:
+        dev_max = _snap_cu(dev_min + 1)
+
+    # --- Staging: mirrors prod min, slightly lower max ---
+    stg_min = _snap_cu(max(1, prod_cu_min))
+    stg_max = _snap_cu(max(stg_min + 2, prod_cu_min + 4))
+    if stg_max <= stg_min:
+        stg_max = _snap_cu(stg_min + 2)
+    if stg_max - stg_min > 16:
+        stg_max = _snap_cu(stg_min + 16)
+
+    ha_recommended = prod_cu_max >= 8
+
+    env_sizing = [
+        EnvironmentSizing(
+            env="dev",
+            cu_min=dev_min,
+            cu_max=dev_max,
+            scale_to_zero=True,
+            autoscaling=True,
+            max_connections=max_connections_for_cu(dev_max),
+            ram_gb=dev_max * 2,
+            notes="Scale-to-zero after 15 min idle. Minimal footprint for development and testing.",
+        ),
+        EnvironmentSizing(
+            env="staging",
+            cu_min=stg_min,
+            cu_max=stg_max,
+            scale_to_zero=True,
+            autoscaling=True,
+            max_connections=max_connections_for_cu(stg_max),
+            ram_gb=stg_max * 2,
+            notes="Scale-to-zero after 30 min idle. Mirrors production sizing for integration testing.",
+        ),
+        EnvironmentSizing(
+            env="prod",
+            cu_min=prod_cu_min,
+            cu_max=prod_cu_max,
+            scale_to_zero=False,
+            autoscaling=True,
+            max_connections=max_connections_for_cu(prod_cu_max),
+            ram_gb=prod_cu_max * 2,
+            notes=(
+                f"Always-on. {'High availability recommended. ' if ha_recommended else ''}"
+                f"Working set ~{size_gb:.0f} GB."
+            ),
+        ),
+    ]
+
+    return tier, int(prod_cu_min), int(prod_cu_max), env_sizing
