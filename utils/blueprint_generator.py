@@ -8,7 +8,8 @@ Generates a structured 4-phase migration plan:
   Phase 4: Performance Tuning & Go-Live
 
 Engine-aware: produces engine-specific commands, auth notes,
-and decommission steps for Aurora, RDS, Cloud SQL, Azure, and self-managed PG.
+and decommission steps for Aurora, RDS, Cloud SQL, Azure, self-managed PG,
+DynamoDB, and Cosmos DB.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ _ENGINE_LABELS = {
     "alloydb-postgresql": "Google AlloyDB for PostgreSQL",
     "supabase-postgresql": "Supabase PostgreSQL",
     "dynamodb": "Amazon DynamoDB",
+    "cosmosdb-nosql": "Azure Cosmos DB (NoSQL API)",
 }
 
 _AUTH_MIGRATION_NOTES = {
@@ -45,6 +47,7 @@ _AUTH_MIGRATION_NOTES = {
     "alloydb-postgresql": "Switch authentication from GCP IAM DB auth to Databricks OAuth tokens",
     "supabase-postgresql": "Switch authentication from Supabase JWT/API keys to Databricks OAuth tokens",
     "dynamodb": "Switch authentication from AWS IAM roles/access keys to Databricks OAuth tokens",
+    "cosmosdb-nosql": "Switch authentication from Entra ID / Cosmos DB RBAC to Databricks OAuth tokens",
 }
 
 _POOLING_NOTES = {
@@ -56,6 +59,7 @@ _POOLING_NOTES = {
     "alloydb-postgresql": "Update connection pooling (replace AlloyDB Auth Proxy with direct app-side pooling)",
     "supabase-postgresql": "Update connection pooling (replace Supavisor pooler with app-side pooling)",
     "dynamodb": "N/A for DynamoDB (HTTP API, no persistent connections); configure app-side connection pooling for Lakebase",
+    "cosmosdb-nosql": "N/A for Cosmos DB (HTTP API, SDK manages connections); configure app-side connection pooling for Lakebase",
 }
 
 _DECOMMISSION_STEPS = {
@@ -67,6 +71,7 @@ _DECOMMISSION_STEPS = {
     "alloydb-postgresql": "Delete AlloyDB cluster after validation period (recommended: 2 weeks); revoke IAM bindings",
     "supabase-postgresql": "Pause or delete Supabase project after validation period (recommended: 2 weeks); revoke API keys",
     "dynamodb": "Disable DynamoDB Streams consumers, scale down provisioned capacity to minimum, delete tables after validation period (recommended: 2 weeks)",
+    "cosmosdb-nosql": "Disable Change Feed consumers, scale down RU/s to minimum, delete containers and account after validation period (recommended: 2 weeks)",
 }
 
 _NETWORK_PREREQS = {
@@ -78,6 +83,7 @@ _NETWORK_PREREQS = {
     "alloydb-postgresql": "Network connectivity between AlloyDB VPC and Lakebase endpoint (Private Service Connect or public)",
     "supabase-postgresql": "Network connectivity between Supabase project and Lakebase endpoint (public; use connection string from Supabase dashboard)",
     "dynamodb": "VPC endpoint for DynamoDB and S3 gateway endpoint for Export to S3; network connectivity to Lakebase endpoint",
+    "cosmosdb-nosql": "Azure Private Endpoint for Cosmos DB; network connectivity between Azure VNet and Databricks Private Link endpoint",
 }
 
 
@@ -223,6 +229,26 @@ def render_blueprint_markdown(
             "are platform-managed and do not migrate. Replace Supabase Auth with Databricks "
             "identity management. Replace Supabase Realtime with application-level WebSockets."
         )
+    elif source_engine == "cosmosdb-nosql":
+        lines.append(
+            "- **Cosmos DB note**: This is a cross-engine NoSQL-to-relational migration. "
+            "Schema must be redesigned from query patterns and partition key access, not ported directly. "
+            "Use Change Feed or Azure Data Factory for data export."
+        )
+        lines.append("\n**Cosmos DB Type Mapping:**\n")
+        lines.append("| Cosmos DB JSON | PostgreSQL | Notes |")
+        lines.append("|---------------|-----------|-------|")
+        lines.append("| String | `text` / `varchar` | |")
+        lines.append("| Number (integer) | `integer` / `bigint` | |")
+        lines.append("| Number (float) | `numeric` / `double precision` | |")
+        lines.append("| Boolean | `boolean` | |")
+        lines.append("| Null | SQL `NULL` | |")
+        lines.append("| Array | `jsonb` or normalized child table | Normalize if homogeneous |")
+        lines.append("| Object (nested) | `jsonb` or normalized related table | Flatten top-level fields |")
+        lines.append("| Partition Key | Primary key column | |")
+        lines.append("| `id` (CosmosDB) | `id UUID PRIMARY KEY` | Required by Cosmos DB, map to PK |")
+        lines.append("| `_ts` (timestamp) | `updated_at TIMESTAMPTZ` | Auto-generated epoch |")
+        lines.append("| `_etag` | `version INTEGER` | Optimistic locking |")
     elif source_engine == "dynamodb":
         lines.append(
             "- **DynamoDB note**: This is a cross-engine NoSQL-to-relational migration. "
@@ -292,7 +318,7 @@ def _select_strategy(
     workload: WorkloadProfile | None,
     source_engine: str = "aurora-postgresql",
 ) -> MigrationStrategy:
-    if source_engine == "dynamodb":
+    if source_engine in ("dynamodb", "cosmosdb-nosql"):
         return MigrationStrategy.CROSS_ENGINE
 
     if db.pg_version and not db.pg_version.startswith(("14", "15", "16", "17")):
@@ -318,6 +344,33 @@ def _phase_1_schema(
     db_name: str,
     source_engine: str = "aurora-postgresql",
 ) -> MigrationPhase:
+    if source_engine == "cosmosdb-nosql":
+        container_count = db.table_count
+        steps = [
+            "Analyze Cosmos DB SQL API query patterns and partition key usage to design relational schema",
+            "Map partition keys to PostgreSQL primary keys; convert hierarchical keys to composite PKs",
+            "Flatten nested JSON documents into normalized relational tables with foreign keys",
+            "Design PostgreSQL indexes based on Cosmos DB indexing policies (consistent/lazy/none)",
+            "Use JSONB columns for deeply nested or variable-structure subdocuments",
+            "Create schema in Lakebase target branch and validate with sample data",
+        ]
+        commands = [
+            "# Cosmos DB type mapping: String->text, Number->numeric/bigint, Boolean->boolean, Object->jsonb, Array->jsonb",
+            "# Design SQL schema based on query patterns, not container structure",
+        ]
+        return MigrationPhase(
+            phase_number=1,
+            name="Schema Design & Relational Modeling",
+            description=(
+                "Design a relational schema from Cosmos DB document structures and query patterns. "
+                "Map partition keys to primary keys, flatten documents to normalized tables, "
+                "and convert indexing policies to PostgreSQL indexes."
+            ),
+            steps=steps,
+            estimated_days=max(5, container_count * 0.5 + 3),
+            commands=commands,
+        )
+
     if source_engine == "dynamodb":
         steps = [
             "Analyze DynamoDB access patterns (GetItem, Query, Scan, BatchWrite) to design relational schema",
@@ -465,7 +518,27 @@ def _phase_2_data(
         ]
         est_days = max(3, db.size_gb / 100 + 2)
     else:
-        if source_engine == "dynamodb":
+        if source_engine == "cosmosdb-nosql":
+            steps = [
+                "Export Cosmos DB containers using Change Feed (full-fidelity) or Azure Data Factory",
+                "Alternatively, use the Spark Cosmos DB Connector to read all containers into DataFrames",
+                "Transform JSON documents to relational format (flatten nested objects, normalize arrays)",
+                "Write transformed data to Azure Blob Storage / ADLS Gen2 as Parquet or CSV",
+                "Bulk load into Lakebase using COPY or Databricks notebook with psycopg batch INSERT",
+                "Verify record counts match (Cosmos DB item count vs PostgreSQL row count)",
+                "Set up incremental sync via Change Feed processor if cutover window is needed",
+            ]
+            commands = [
+                "# Option 1: Export via Azure Data Factory Copy Activity",
+                "# Source: Cosmos DB (NoSQL API)  ->  Sink: Azure Blob CSV/Parquet",
+                "",
+                "# Option 2: Spark Cosmos DB Connector (Databricks notebook)",
+                '# df = spark.read.format("cosmos.oltp").option("spark.cosmos.accountEndpoint", "<endpoint>").load()',
+                "",
+                "# Load into Lakebase",
+                "# COPY users FROM '/path/to/users.csv' WITH (FORMAT csv, HEADER true);",
+            ]
+        elif source_engine == "dynamodb":
             steps = [
                 "Enable PITR on all DynamoDB tables (required for Export to S3)",
                 "Export DynamoDB tables to S3 using ExportTableToPointInTime (zero impact on table performance)",
@@ -507,6 +580,29 @@ def _phase_3_application(
 ) -> MigrationPhase:
     auth_note = _AUTH_MIGRATION_NOTES.get(source_engine, _AUTH_MIGRATION_NOTES["aurora-postgresql"])
     pool_note = _POOLING_NOTES.get(source_engine, _POOLING_NOTES["aurora-postgresql"])
+
+    if source_engine == "cosmosdb-nosql":
+        steps = [
+            "Rewrite Cosmos DB SDK calls (ReadItem, CreateItem, Query) to SQL queries via psycopg/JDBC",
+            auth_note,
+            "Replace Change Feed consumers with application-level triggers or Lakeflow Connect",
+            "Replace Cosmos DB integrated cache with application-side caching (Redis) or PostgreSQL materialized views",
+            "Map Cosmos DB consistency semantics to PostgreSQL transaction isolation levels",
+            "Update Entra ID / RBAC access to Databricks OAuth token authentication",
+            "Configure Synced Tables for Delta Lake integration (OLTP-to-OLAP sync)",
+        ]
+        return MigrationPhase(
+            phase_number=3,
+            name="Application Rewrite",
+            description="Rewrite Cosmos DB SDK calls to SQL, replace Change Feed consumers, and update authentication to Databricks OAuth.",
+            steps=steps,
+            estimated_days=10,
+            commands=[
+                f'DATABASE_URL = "postgresql://<user>:<oauth_token>@{lakebase_ep}:5432/{db_name}?sslmode=require"',
+                "# Replace: container.read_item(item='123', partition_key='user-123')",
+                "# With:    cur.execute('SELECT * FROM users WHERE user_id = %s', ('user-123',))",
+            ],
+        )
 
     if source_engine == "dynamodb":
         steps = [

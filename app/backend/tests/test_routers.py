@@ -232,6 +232,186 @@ class TestProfileCache:
 
 
 # ---------------------------------------------------------------------------
+# Assessment: CosmosDB cost-estimate, extension-matrix, warnings
+# ---------------------------------------------------------------------------
+
+
+class TestAssessmentCosmosDB:
+    def _seed_cosmosdb_profile(self):
+        """Insert a mock CosmosDB profile into the assessment cache for testing."""
+        from app.backend.routers.assessment import _profiles
+        from config.migration_profiles import (
+            DatabaseProfile,
+            MigrationProfile,
+            SourceEngine,
+            WorkloadProfile,
+        )
+
+        db = DatabaseProfile(
+            name="cosmos-test-db",
+            size_bytes=50_000_000_000,
+            size_gb=46.6,
+            table_count=8,
+            schema_count=1,
+            schemas=["default"],
+            extensions=[],
+            functions=[],
+            triggers=[],
+            cosmos_throughput_mode="provisioned",
+            cosmos_ru_per_sec=4000,
+            cosmos_partition_key_paths=["/userId", "/orderId"],
+            cosmos_consistency_level="Session",
+            cosmos_change_feed_enabled=False,
+            cosmos_change_feed_mode="LatestVersion",
+            cosmos_multi_region_writes=True,
+            cosmos_regions=["eastus", "westeurope"],
+            cosmos_container_details=[
+                {"name": "Users", "partition_key": "/userId", "ru_per_sec": 2000},
+                {"name": "Orders", "partition_key": "/orderId", "ru_per_sec": 2000},
+            ],
+            cosmos_autoscale_max_ru=None,
+            cosmos_backup_policy="periodic",
+        )
+        profile = MigrationProfile(
+            profile_id="cosmos-test-001",
+            source_engine=SourceEngine.COSMOSDB_NOSQL,
+            source_endpoint="myaccount.documents.azure.com",
+            source_version="CosmosDB",
+            source_region="eastus",
+            databases=[db],
+            workload=WorkloadProfile(
+                avg_qps=2800, avg_tps=700, connection_count_avg=60, connection_count_peak=200,
+                workload_source="mock",
+            ),
+        )
+        _profiles.set("cosmos-test-001", {"_profile": profile})
+        return "cosmos-test-001"
+
+    @patch("app.backend.routers.assessment._get_agent")
+    def test_discover_cosmosdb_fields(self, mock_agent_fn):
+        """Discover response for CosmosDB must include change_feed_mode and backup_policy."""
+        agent = MagicMock()
+        agent.connect_and_discover.return_value = {
+            "profile_id": "cosmos-disco-1",
+            "source_engine": "cosmosdb-nosql",
+            "cosmos_change_feed_enabled": False,
+            "cosmos_change_feed_mode": "LatestVersion",
+            "cosmos_backup_policy": "continuous",
+        }
+        mock_agent_fn.return_value = agent
+        resp = _post("/api/assessment/discover", json={
+            "mock": True,
+            "source_engine": "cosmosdb-nosql",
+            "subscription_id": "sub-123",
+            "resource_group": "rg-test",
+        })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cosmos_change_feed_mode"] == "LatestVersion"
+        assert body["cosmos_backup_policy"] == "continuous"
+
+    def test_cost_estimate_cosmosdb(self):
+        pid = self._seed_cosmosdb_profile()
+        resp = _get(f"/api/assessment/cost-estimate/{pid}")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["engine"] == "cosmosdb-nosql"
+        assert body["source"]["total"] > 0
+        assert body["lakebase"]["total"] > 0
+        assert "pricing_source" in body
+        assert body.get("tier") == "premium"
+        assert body.get("tier_label") == "Premium"
+        assert body["lakebase"]["rates"]["dbu_rate"] == 0.46
+        assert body["lakebase"]["pricing_source"] == "static"
+        assert "pricing_version" in body["lakebase"]
+        assert body.get("workload_source") == "mock"
+        assert "workload_caveat" in body
+        detail = body.get("cosmos_cost_detail")
+        assert detail is not None
+        assert detail["multi_region_writes"] is True
+        assert detail["num_regions"] == 2
+        assert detail["region_multiplier"] == 2
+
+    def test_cost_estimate_enterprise_tier(self):
+        pid = self._seed_cosmosdb_profile()
+        resp = _get(f"/api/assessment/cost-estimate/{pid}?tier=enterprise")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["tier"] == "enterprise"
+        assert body["tier_label"] == "Enterprise"
+        assert body["lakebase"]["rates"]["dbu_rate"] == 0.60
+        assert "sku_name" in body
+
+    def test_extension_matrix_cosmosdb(self):
+        pid = self._seed_cosmosdb_profile()
+        resp = _get(f"/api/assessment/extension-matrix/{pid}")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["matrix_type"] == "feature"
+        names = [e["name"] for e in body["extensions"]]
+        assert "Partition keys" in names or "Change Feed" in names
+        assert body["summary"]["supported"] > 0
+
+    @patch("app.backend.routers.assessment._get_agent")
+    def test_readiness_returns_warnings(self, mock_agent_fn):
+        agent = MagicMock()
+        agent.assess_readiness.return_value = {
+            "overall_score": 65,
+            "category": "ready_with_workarounds",
+            "blocker_count": 1,
+            "warning_count": 3,
+            "dimensions": {},
+            "blockers": [],
+            "supported_extensions": [],
+            "unsupported_extensions": ["Integrated cache"],
+            "warnings": [
+                "Provisioned throughput mode requires capacity planning for Lakebase CU sizing",
+                "'Integrated cache' requires workaround: Use application-level caching",
+                "Cosmos DB consistency level 'Strong' has no direct Lakebase equivalent",
+            ],
+            "sizing_by_env": [],
+        }
+        mock_agent_fn.return_value = agent
+        resp = _post("/api/assessment/readiness", json={"mock": True})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["warnings"]) == 3
+        assert any("capacity planning" in w for w in body["warnings"])
+        assert any("Lakebase equivalent" in w for w in body["warnings"])
+        assert "sizing_by_env" in body
+
+    @patch("app.backend.routers.assessment._get_agent")
+    def test_readiness_returns_sizing_by_env(self, mock_agent_fn):
+        agent = MagicMock()
+        agent.assess_readiness.return_value = {
+            "overall_score": 85,
+            "category": "ready",
+            "blocker_count": 0,
+            "warning_count": 0,
+            "dimensions": {},
+            "blockers": [],
+            "supported_extensions": [],
+            "unsupported_extensions": [],
+            "warnings": [],
+            "sizing_by_env": [
+                {"env": "dev", "cu_min": 0.5, "cu_max": 2, "scale_to_zero": True, "autoscaling": True, "max_connections": 419, "ram_gb": 4, "notes": "Dev env"},
+                {"env": "staging", "cu_min": 2, "cu_max": 4, "scale_to_zero": True, "autoscaling": True, "max_connections": 839, "ram_gb": 8, "notes": "Staging env"},
+                {"env": "prod", "cu_min": 2, "cu_max": 8, "scale_to_zero": False, "autoscaling": True, "max_connections": 1678, "ram_gb": 16, "notes": "Prod env"},
+            ],
+        }
+        mock_agent_fn.return_value = agent
+        resp = _post("/api/assessment/readiness", json={"mock": True})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["sizing_by_env"]) == 3
+        envs = [e["env"] for e in body["sizing_by_env"]]
+        assert envs == ["dev", "staging", "prod"]
+        prod = body["sizing_by_env"][2]
+        assert prod["scale_to_zero"] is False
+        assert prod["max_connections"] == 1678
+
+
+# ---------------------------------------------------------------------------
 # Global exception handler
 # ---------------------------------------------------------------------------
 

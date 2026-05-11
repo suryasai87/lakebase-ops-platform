@@ -1,8 +1,8 @@
 # LakebaseOps Platform — V2 Architecture & Implementation Reference
 
-**Version:** 2.2
+**Version:** 2.6
 **Last Updated:** 2026-03-11
-**Status:** Implemented & Tested (51 tools, 3 agents, 8 source engines, 3 dashboard enrichments)
+**Status:** Implemented & Tested (51 tools, 3 agents, 10 source engines, 3 dashboard enrichments, cross-cloud tier-aware pricing, environment sizing, AWS live pricing)
 
 ---
 
@@ -76,7 +76,204 @@ All three monolithic agent files (~800+ lines each) have been refactored into su
 
 ---
 
-## I-C. Summary of Changes from V2.1 to V2.2
+## I-C4. Summary of Changes from V2.5 to V2.6
+
+### 23. Cost Estimator Audit & Rate Corrections
+
+All source engine rates audited against public pricing APIs. Corrections applied:
+
+| Engine | Old Rate | Corrected Rate | Source |
+|--------|---------|---------------|--------|
+| Aurora PostgreSQL (Standard) | $0.48/hr | $0.519/hr | AWS Price List API |
+| RDS PostgreSQL | $0.48/hr | $0.45/hr | AWS Price List API |
+| Azure Flexible Server | $0.37/hr | $0.356/hr | Azure Retail Prices API |
+
+### 24. Aurora I/O-Optimized Engine
+
+Added `aurora-postgresql-io` as a separate engine entry: $0.675/hr compute, $0.225/GB storage, $0/IO. ~40% of production Aurora customers use this tier, which bundles I/O into compute and storage pricing.
+
+### 25. DynamoDB Pricing Model Restructure
+
+Replaced the conflated `compute_per_hour` + `io_per_million` model with separate WRU ($1.25/M) and RRU ($0.25/M) rates. The cost formula now uses the workload's `reads_pct` / `writes_pct` to split QPS into reads vs writes, producing a 5x-accurate I/O cost estimate.
+
+### 26. Azure Lakebase Cross-Cloud Uplift
+
+Applied ~15% Azure uplift to Lakebase DBU rates:
+- Azure Premium: $0.40 -> $0.46/DBU (vs AWS $0.40)
+- Azure Enterprise: $0.52 -> $0.60/DBU (vs AWS $0.52)
+
+Documented cross-cloud tier equivalence: Azure Premium = AWS Enterprise in feature set.
+
+### 27. CU Estimate Formula Fix
+
+Replaced the naive `avg_connections / 50` divisor with the assessment's actual `recommended_cu_min` / `recommended_cu_max` (or `connections / 209` as fallback). The previous formula overestimated CU by ~4x.
+
+### 28. AWS Live Pricing Fetcher
+
+Extended `config/pricing_fetcher.py` to fetch live pricing from the AWS Price List Bulk API for Aurora, RDS, and DynamoDB. Same 3-tier architecture as CosmosDB: live -> cache -> static.
+
+### 29. Committed-Use Discount References
+
+Added Lakebase committed-use discount reference lines to the cost estimate response: 1-year (~25%), 3-year (~40%) savings with estimated totals per commitment level.
+
+### 30. Confidence Indicators & Documentation
+
+Added `confidence` field to each engine (`verified` / `estimated` / `stale`) and `last_verified` dates. Added "Rate Validation" section to README with curl commands for verifying rates against public APIs.
+
+## I-C3. Summary of Changes from V2.4 to V2.5
+
+### 18. Corrected Lakebase Pricing Model
+
+The Lakebase DBU rate was incorrectly set to `$0.070/DBU` (Model Serving rate). Corrected to use the **Database Serverless Compute** SKU:
+
+| Tier | DBU Rate (US) | SKU Pattern |
+|------|---------------|-------------|
+| Premium | $0.40/DBU | `PREMIUM_DATABASE_SERVERLESS_COMPUTE_{REGION}` |
+| Enterprise | $0.52/DBU | `ENTERPRISE_DATABASE_SERVERLESS_COMPUTE_{REGION}` |
+
+The compute formula was corrected from `CU x 2 DBU/CU x rate x 730` to `CU x 1 DBU/CU/hr x rate x 730` (Lakebase bills at 1 DBU per CU per hour).
+
+**Pricing provenance** added to the registry: `source_url`, `sku_pattern`, `last_verified`, `dbu_per_cu_hour` constants.
+
+### 19. Tier-Aware Cost Estimation
+
+The cost estimate API now accepts `?tier=premium|enterprise` (default: `premium`). Response includes:
+
+- `tier` and `tier_label` fields
+- `sku_name` (resolved SKU for the region)
+- Correct DBU rate for the selected tier
+- `LAKEBASE_COST_DISCLAIMER` with explicit "contact your Databricks account team" guidance
+
+### 20. Environment-Aware Sizing Recommendations
+
+New `EnvironmentSizing` dataclass and `CU_TO_MAX_CONNECTIONS` mapping based on official Lakebase specs:
+
+| Metric | Dev | Staging | Prod |
+|--------|-----|---------|------|
+| CU range | prod_min/4 - prod_min/2 | prod_min - prod_min+4 | Workload-derived |
+| Scale-to-zero | Yes (15 min) | Yes (30 min) | No (always-on) |
+| Autoscaling | Yes | Yes | Yes |
+
+Prod sizing is derived from peak connections (209 conns/CU), QPS, and working set size (2 GB/CU).
+
+The readiness API now returns `sizing_by_env` with per-environment CU ranges, scale-to-zero, max connections, RAM, and notes.
+
+### 21. Per-Environment Cost Breakdown
+
+Cost estimate API now returns `env_cost_breakdown` with per-environment monthly cost estimates:
+- Dev: ~35% utilization (scale-to-zero during idle)
+- Staging: ~60% utilization (scale-to-zero with moderate usage)
+- Prod: 100% utilization (always-on, average of CU range)
+
+### 22. Frontend Enhancements
+
+- **CostEstimate.tsx:** Displays tier label (`Premium`/`Enterprise`), SKU reference, 1 DBU/CU/hr assumption, stronger disclaimer
+- **Assessment.tsx:** New "Environment Sizing" card with dev/staging/prod recommendation table and Premium/Enterprise tier toggle
+- Tier selector dynamically refetches cost estimates with the selected tier
+
+**Files changed:**
+- `config/pricing.py` - Tier-aware `LAKEBASE_PRICING`, corrected DBU rates, `LAKEBASE_COST_DISCLAIMER`
+- `config/migration_profiles.py` - `EnvironmentSizing` dataclass, `CU_TO_MAX_CONNECTIONS`, `max_connections_for_cu()`
+- `utils/readiness_scorer.py` - `_recommend_sizing()` returns per-env sizing, `_snap_cu()` helper
+- `agents/provisioning/assessment.py` - `sizing_by_env` in assessment summary
+- `app/backend/routers/assessment.py` - Tier param, corrected formula, env cost breakdown, sizing in readiness
+- `app/frontend/src/components/CostEstimate.tsx` - Tier label, SKU, enhanced disclaimer
+- `app/frontend/src/pages/Assessment.tsx` - Environment Sizing table, tier selector
+- `tests/test_assessment.py` - Pricing registry, environment sizing, cost formula tests
+- `app/backend/tests/test_routers.py` - Tier param, enterprise tier, sizing_by_env tests
+
+---
+
+## I-C2. Summary of Changes from V2.3 to V2.4
+
+### 13. Live Cosmos DB Discovery Adapter
+
+Added a live discovery adapter (`agents/provisioning/cosmos_adapter.py`) that connects to a real Azure Cosmos DB account using the `azure-cosmos` Python SDK:
+
+- Extracts account properties: consistency level, multi-region writes, regions, backup policy
+- Discovers containers: partition keys, throughput (provisioned/autoscale), indexing policies, item counts
+- Derives `DatabaseProfile` directly from live data, no mock required
+- Graceful fallback: if `azure-cosmos` is not installed or discovery fails, routes to CosmosDB-specific mock data (not PostgreSQL mock)
+
+**Engine-aware routing in `assessment.py`:** When `mock=False` and `source_engine == "cosmosdb-nosql"`, `connect_and_discover` and `profile_workload` call the live adapter. The workload profile is derived from discovered RU capacity.
+
+### 14. 3-Tier Dynamic Pricing Architecture
+
+Replaced static-only pricing for CosmosDB with a layered fetch strategy (`config/pricing_fetcher.py`):
+
+| Tier | Source | TTL | Fallback |
+|------|--------|-----|----------|
+| 1. Live | Azure Retail Prices API (`prices.azure.com`) | N/A | -> Tier 2 |
+| 2. Cache | `~/.lakebase-ops/pricing_cache.json` | 24 hours | -> Tier 3 |
+| 3. Static | `config/pricing.py` registry | N/A | Always available |
+
+The API response now includes `pricing_source` ("live", "cached", or "static") so the UI can display a pricing provenance indicator.
+
+### 15. Enhanced CosmosDB Cost Model
+
+The cost estimator for CosmosDB now accounts for:
+
+- **Multi-region writes:** multiplier based on region count (default 1.0 for single-region)
+- **Autoscale throughput:** models utilization at ~66% of max RU for cost estimation
+- **Backup policy:** continuous backup adds ~20% surcharge vs periodic
+- **Reserved capacity:** reference line showing potential savings with 1-year reservation
+- **Detailed breakdown:** API returns `cosmos_cost_detail` with per-component costs
+
+### 16. Readiness Warnings Propagation Fix
+
+Fixed a bug where readiness scorer warnings were aliased to `unsupported_extensions` instead of being passed through as distinct, human-readable strings.
+
+**Backend:** `assess_readiness` summary now includes `"warnings": list(assessment.warnings)`.
+**API:** `/api/assessment/readiness` returns both `unsupported_extensions` and `warnings` as separate fields.
+**UI:** New "Migration Warnings" `Accordion` (default expanded) in `Assessment.tsx` with severity-aware Alert components.
+
+### 17. New DatabaseProfile Fields
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `cosmos_autoscale_max_ru` | `int | None` | Autoscale max throughput for cost model |
+| `cosmos_backup_policy` | `str | None` | "continuous" or "periodic" for backup cost |
+
+**Files changed:**
+- `agents/provisioning/cosmos_adapter.py` (new) - Live CosmosDB discovery adapter
+- `config/pricing_fetcher.py` (new) - 3-tier pricing fetch/cache/fallback
+- `config/migration_profiles.py` - New `DatabaseProfile` fields
+- `agents/provisioning/assessment.py` - Engine-aware routing, live discovery/workload methods, warnings in summary
+- `app/backend/routers/assessment.py` - Live pricing integration, enhanced cost model, warnings fix
+- `app/frontend/src/pages/Assessment.tsx` - Migration Warnings section, pricing source pass-through
+- `app/frontend/src/components/CostEstimate.tsx` - Pricing source indicator chip
+- `app/backend/tests/test_routers.py` - CosmosDB cost, feature matrix, warnings tests
+- `tests/test_assessment.py` - Live discover fallback, pricing fetcher, warnings propagation tests
+- `app/frontend/src/__tests__/Assessment.test.tsx` (new) - CosmosDB discovery & warnings rendering tests
+
+---
+
+## I-C. Summary of Changes from V2.2 to V2.3
+
+### 12. Azure Cosmos DB Source Engine (8 -> 9)
+
+Added Azure Cosmos DB (NoSQL API) as the second NoSQL source engine, extending the cross-engine migration pattern established by DynamoDB:
+
+| Engine | Cloud | Type | Key Features |
+|--------|-------|------|-------------|
+| Azure Cosmos DB (NoSQL) | Azure | NoSQL | Partition keys, RU-based throughput, Change Feed, Multi-region writes, 5 consistency levels, Container-level indexing policies |
+
+**CosmosDB-specific DatabaseProfile fields:** `cosmos_throughput_mode`, `cosmos_ru_per_sec`, `cosmos_partition_key_paths`, `cosmos_consistency_level`, `cosmos_change_feed_enabled`, `cosmos_multi_region_writes`, `cosmos_regions`, `cosmos_container_details` (all `Optional`, `None` for non-CosmosDB engines).
+
+**Files changed:**
+- `config/migration_profiles.py` - Added `COSMOSDB_NOSQL` to `SourceEngine`, `ENGINE_KIND` map, CosmosDB-specific fields to `DatabaseProfile`
+- `agents/provisioning/assessment.py` - Added `_mock_discover_cosmosdb()`, `_mock_workload_cosmosdb()`, conditional summary fields for CosmosDB
+- `utils/readiness_scorer.py` - Added `COSMOSDB_FEATURE_SUPPORT`, `COSMOSDB_FEATURE_WORKAROUNDS`, CosmosDB scoring paths (features, complexity, replication, operational)
+- `utils/blueprint_generator.py` - CosmosDB engine maps, CosmosDB-specific phases (relational modeling from partition keys, ADF/Spark export, SDK rewrite)
+- `config/pricing.py` - CosmosDB provisioned throughput pricing entry (RU/s-based compute, GB-based storage)
+- `app/backend/routers/assessment.py` - CosmosDB feature matrix, RU-based cost estimation, pricing URLs, enhanced disclaimer
+- `app/frontend/src/pages/Assessment.tsx` - CosmosDB engine option, conditional discovery display (RU/s, consistency, Change Feed)
+- `app/frontend/src/components/CostEstimate.tsx` - Pricing URLs display, prominent cost disclaimer banner
+- `test_assessment.py` - 4 new CosmosDB tests (discovery, readiness, blueprint, end-to-end)
+
+---
+
+## I-D. Summary of Changes from V2.1 to V2.2
 
 ### 11. Amazon DynamoDB Source Engine (7 -> 8)
 
@@ -175,8 +372,9 @@ lakebase-ops-platform/
 ├── config/
 │   ├── __init__.py
 │   ├── settings.py                  # All constants: workspace, catalog, tables, thresholds
-│   ├── migration_profiles.py        # Assessment dataclasses + SourceEngine enum (8 engines)
-│   └── pricing.py                   # Static pricing registry: per-engine, per-region rates + formulas
+│   ├── migration_profiles.py        # Assessment dataclasses + SourceEngine enum (9 engines)
+│   ├── pricing.py                   # Static pricing registry: per-engine, per-region rates + formulas
+│   └── pricing_fetcher.py           # Live pricing: Azure Retail API fetch, file cache (24h TTL), static fallback
 |
 ├── framework/
 │   ├── __init__.py
@@ -198,7 +396,8 @@ lakebase-ops-platform/
 │   │   ├── migration.py             # MigrationMixin: apply_migration, capture_schema_diff, test_migration
 │   │   ├── cicd.py                  # CICDMixin: setup_cicd_pipeline
 │   │   ├── governance.py            # GovernanceMixin: configure_rls, uc_integration, ai_branching
-│   │   └── assessment.py            # AssessmentMixin: 4-step pipeline, 7 engine-specific mocks
+│   │   ├── assessment.py            # AssessmentMixin: 4-step pipeline, 7 engine-specific mocks, live routing
+│   │   └── cosmos_adapter.py        # CosmosDiscoveryAdapter: live azure-cosmos SDK discovery
 │   |
 │   ├── performance/                 # 14 tools
 │   │   ├── __init__.py
@@ -473,13 +672,15 @@ Simulation Results:
     - vacuum_history: 4 records
 
 Assessment Coverage:
-  - 8 source engines tested (Aurora, RDS, Cloud SQL, Azure, Self-Managed, AlloyDB, Supabase, DynamoDB)
-  - Per-engine extension/feature profiles verified (unique extensions per PG engine, feature matrix for DynamoDB)
+  - 9 source engines tested (Aurora, RDS, Cloud SQL, Azure, Self-Managed, AlloyDB, Supabase, DynamoDB, CosmosDB)
+  - Per-engine extension/feature profiles verified (unique extensions per PG engine, feature matrix for DynamoDB and CosmosDB)
   - Region-aware cost estimation verified across AWS, GCP, Azure regions
   - Extension compatibility matrix validated (supported/workaround/unsupported)
   - DynamoDB feature compatibility matrix validated (Streams, TTL, DAX, Global Tables)
   - DynamoDB cross-engine blueprint verified (relational modeling, S3 export, ETL, app rewrite)
-  - Pricing formulas verified against config/pricing.py registry (including DynamoDB WRU/RRU)
+  - CosmosDB feature compatibility matrix validated (Change Feed, Multi-region writes, Consistency levels, Integrated cache)
+  - CosmosDB cross-engine blueprint verified (relational modeling, ADF/Spark export, SDK rewrite)
+  - Pricing formulas verified against config/pricing.py registry (including DynamoDB WRU/RRU, CosmosDB RU/s)
 
 Verification:
   - No information_schema references in agents/
@@ -500,7 +701,7 @@ Verification:
 | `POST` | `/api/assessment/profile/{id}` | `assessment.py` | Profile workload (QPS, TPS, connections) |
 | `POST` | `/api/assessment/readiness/{id}` | `assessment.py` | Score readiness (6 dimensions) |
 | `POST` | `/api/assessment/blueprint/{id}` | `assessment.py` | Generate 4-phase migration blueprint |
-| `GET` | `/api/assessment/extension-matrix/{id}` | `assessment.py` | Extension (PG) or feature (DynamoDB) compatibility matrix |
+| `GET` | `/api/assessment/extension-matrix/{id}` | `assessment.py` | Extension (PG) or feature (DynamoDB/CosmosDB) compatibility matrix |
 | `GET` | `/api/assessment/timeline/{id}` | `assessment.py` | Migration timeline for Gantt chart |
 | `GET` | `/api/assessment/cost-estimate/{id}` | `assessment.py` | Region-aware cost comparison |
 | `GET` | `/api/assessment/regions/{engine}` | `assessment.py` | Available regions for engine |
@@ -509,20 +710,28 @@ Verification:
 ### Cost Estimation Data Flow
 
 ```
-Assessment.tsx                    Backend                         config/pricing.py
-+------------------+    POST     +--------------------+          +------------------+
-| Select engine    |------------>| /discover          |          | SOURCE_ENGINES   |
-| Select region    |    GET      | /regions/{engine}  |<-------->| CLOUD_REGIONS    |
-| Run blueprint    |------------>| /blueprint/{id}    |          | ENGINE_CLOUD_MAP |
-|                  |    GET      | /cost-estimate/{id}|<-------->| LAKEBASE_PRICING |
-|                  |<------------|                    |          | get_source_rates |
-| CostEstimate.tsx |             | Computes:          |          | get_lakebase_rates|
-| - Disclaimer     |             |  source_compute    |          +------------------+
-| - Formula tips   |             |  source_storage    |
-| - Region/version |             |  source_io         |
-| - Source links   |             |  lakebase_compute  |
-+------------------+             |  lakebase_storage  |
-                                 +--------------------+
+Assessment.tsx                    Backend                         Pricing (3-tier)
++------------------+    POST     +--------------------+
+| Select engine    |------------>| /discover          |          Tier 1: Live
+| Select region    |    GET      | /regions/{engine}  |          +------------------+
+| Select tier      |------------>| /blueprint/{id}    |     +--->| Azure Retail API |
+| (Premium/Ent.)   |    GET      | /cost-estimate/{id}|-+   |    | prices.azure.com |
+|                  |    ?tier=   |  pricing_source    | |   |    +------------------+
+|                  |<------------|  tier, tier_label   | +---+         |
+| CostEstimate.tsx |             |  sku_name          |     |    Tier 2: Cache
+| - Tier label     |             |  env_cost_breakdown|     |    +------------------+
+| - SKU reference  |             |  cosmos_cost_detail|     +--->| ~/.lakebase-ops/ |
+| - Disclaimer     |             |                    |     |    | pricing_cache    |
+| - Formula tips   |             | Formula (v2.5):    |     |    | (24h TTL)        |
+| - Pricing source |             |  CU x 1 DBU/CU/hr |     |    +------------------+
+|                  |             |  x dbu_rate x 730  |     |         |
+| Env Sizing Table |             |                    |     |    Tier 3: Static
+| - dev/stg/prod   |             | LAKEBASE_PRICING:  |     |    +------------------+
+| - CU ranges      |             |  premium:  $0.40   |     +--->| config/pricing.py|
+| - scale-to-zero  |             |  enterprise: $0.52 |          | SOURCE_ENGINES   |
+| - max connections |             +--------------------+          | LAKEBASE_PRICING |
++------------------+                                             | (tier-aware)     |
+                                                                 +------------------+
 ```
 
 ### Pricing Registry Schema (`config/pricing.py`)
@@ -539,17 +748,28 @@ SOURCE_ENGINES = {
             "us-east-1": {"compute_per_hour": ..., "storage_per_gb_month": ..., "io_per_million": ...},
             "default": {...}
         },
-        "formulas": {
-            "compute": "compute_per_hour x 730 hours/month",
-            "storage": "storage_per_gb_month x estimated_gb",
-            "io": "io_per_million x estimated_million_requests"
-        }
+        "formulas": {...}
     },
     ...
 }
+
+LAKEBASE_PRICING = {
+    "source_url": "https://www.databricks.com/product/pricing/lakebase",
+    "sku_pattern": "{PREMIUM|ENTERPRISE}_DATABASE_SERVERLESS_COMPUTE_{REGION}",
+    "last_verified": "2026-03",
+    "dbu_per_cu_hour": 1,
+    "tiers": {
+        "premium": {"label": "Premium", "regions": {"aws-us-east-1": {"dbu_rate": 0.40, ...}, ...}},
+        "enterprise": {"label": "Enterprise", "regions": {"aws-us-east-1": {"dbu_rate": 0.52, ...}, ...}},
+    },
+    "formulas": {
+        "compute": "CU x 1 DBU/CU/hr x dbu_rate x 730 hrs/month",
+        "storage": "storage_gb x dsu_rate_per_gb_month",
+    },
+}
 ```
 
-### SourceEngine Enum (8 engines)
+### SourceEngine Enum (9 engines)
 
 ```python
 class SourceEngine(Enum):
@@ -562,6 +782,7 @@ class SourceEngine(Enum):
     SUPABASE_POSTGRESQL = "supabase-postgresql"
     AURORA_MYSQL = "aurora-mysql"
     DYNAMODB = "dynamodb"
+    COSMOSDB_NOSQL = "cosmosdb-nosql"
 ```
 
 ### ENGINE_KIND Discriminator
@@ -569,6 +790,7 @@ class SourceEngine(Enum):
 ```python
 ENGINE_KIND: dict[str, str] = {
     "dynamodb": "nosql",
+    "cosmosdb-nosql": "nosql",
     "aurora-postgresql": "pg",
     "rds-postgresql": "pg",
     "cloud-sql-postgresql": "pg",

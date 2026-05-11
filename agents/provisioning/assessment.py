@@ -1,8 +1,9 @@
 """
 AssessmentMixin — Migration Assessment
 
-Provides tools for assessing external databases (PostgreSQL engines and DynamoDB)
-for migration to Databricks Lakebase. All source connections are read-only.
+Provides tools for assessing external databases (PostgreSQL engines, DynamoDB,
+and Azure Cosmos DB) for migration to Databricks Lakebase.
+All source connections are read-only.
 
 Contains:
 - connect_and_discover: Connect to source DB and inventory schema/extensions/features
@@ -57,6 +58,8 @@ class AssessmentMixin:
         mock: bool = True,
         source_user: str = "",
         source_password: str = "",
+        subscription_id: str = "",
+        resource_group: str = "",
     ) -> dict:
         """
         Connect read-only to a source PostgreSQL instance and discover its schema,
@@ -74,11 +77,18 @@ class AssessmentMixin:
                 "alloydb-postgresql": self._mock_discover_alloydb,
                 "supabase-postgresql": self._mock_discover_supabase,
                 "dynamodb": self._mock_discover_dynamodb,
+                "cosmosdb-nosql": self._mock_discover_cosmosdb,
             }
             discover_fn = _mock_engines.get(source_engine, self._mock_discover)
             db_profile = discover_fn(database or "app_production")
         else:
-            db_profile = self._live_discover(endpoint, database, source_user, source_password)
+            if source_engine == "cosmosdb-nosql":
+                db_profile = self._live_discover_cosmosdb(
+                    endpoint, database, source_user, source_password,
+                    subscription_id=subscription_id, resource_group=resource_group,
+                )
+            else:
+                db_profile = self._live_discover(endpoint, database, source_user, source_password)
 
         is_nosql = ENGINE_KIND.get(source_engine) == "nosql"
         engine = SourceEngine(source_engine)
@@ -91,17 +101,40 @@ class AssessmentMixin:
             "alloydb-postgresql": "10.0.0.5",
             "supabase-postgresql": "db.abcdefghijkl.supabase.co",
             "dynamodb": "dynamodb.us-east-1.amazonaws.com",
+            "cosmosdb-nosql": "myaccount.documents.azure.com",
         }
         profile = MigrationProfile(
             profile_id=profile_id,
             source_engine=engine,
             source_endpoint=endpoint or _mock_endpoints.get(source_engine, "mock-source.example.com"),
-            source_version=db_profile.pg_version if not is_nosql else "DynamoDB",
+            source_version=db_profile.pg_version
+            if not is_nosql
+            else ("CosmosDB" if source_engine == "cosmosdb-nosql" else "DynamoDB"),
             source_region=region,
             databases=[db_profile],
         )
 
-        if is_nosql:
+        if is_nosql and source_engine == "cosmosdb-nosql":
+            summary = {
+                "profile_id": profile_id,
+                "source_engine": engine.value,
+                "source_endpoint": profile.source_endpoint,
+                "source_version": "CosmosDB",
+                "database": db_profile.name,
+                "size_gb": db_profile.size_gb,
+                "table_count": db_profile.table_count,
+                "cosmos_throughput_mode": db_profile.cosmos_throughput_mode or "provisioned",
+                "cosmos_ru_per_sec": db_profile.cosmos_ru_per_sec or 0,
+                "cosmos_consistency_level": db_profile.cosmos_consistency_level or "Session",
+                "cosmos_change_feed_enabled": db_profile.cosmos_change_feed_enabled or False,
+                "cosmos_change_feed_mode": db_profile.cosmos_change_feed_mode or "LatestVersion",
+                "cosmos_backup_policy": db_profile.cosmos_backup_policy,
+                "cosmos_multi_region_writes": db_profile.cosmos_multi_region_writes or False,
+                "cosmos_regions": db_profile.cosmos_regions or [],
+                "cosmos_partition_key_paths": db_profile.cosmos_partition_key_paths or [],
+                "_profile": profile,
+            }
+        elif is_nosql:
             summary = {
                 "profile_id": profile_id,
                 "source_engine": engine.value,
@@ -142,7 +175,16 @@ class AssessmentMixin:
                 "_profile": profile,
             }
 
-        if is_nosql:
+        if is_nosql and source_engine == "cosmosdb-nosql":
+            logger.info(
+                "Discovered %s: %.1f GB, %d containers, %d RU/s, consistency=%s",
+                db_profile.name,
+                db_profile.size_gb,
+                db_profile.table_count,
+                db_profile.cosmos_ru_per_sec or 0,
+                db_profile.cosmos_consistency_level or "unknown",
+            )
+        elif is_nosql:
             logger.info(
                 "Discovered %s: %.1f GB, %d tables, %d GSIs, billing=%s",
                 db_profile.name,
@@ -178,12 +220,17 @@ class AssessmentMixin:
             engine_str = profile_data["_profile"].source_engine.value
 
         if mock:
-            if ENGINE_KIND.get(engine_str) == "nosql":
+            if engine_str == "cosmosdb-nosql":
+                workload = self._mock_workload_cosmosdb()
+            elif ENGINE_KIND.get(engine_str) == "nosql":
                 workload = self._mock_workload_dynamodb()
             else:
                 workload = self._mock_workload()
         else:
-            workload = self._live_workload(profile_data, source_user, source_password)
+            if engine_str == "cosmosdb-nosql":
+                workload = self._live_workload_cosmosdb(profile_data)
+            else:
+                workload = self._live_workload(profile_data, source_user, source_password)
 
         if profile_data and "_profile" in profile_data:
             profile_data["_profile"].workload = workload
@@ -252,6 +299,20 @@ class AssessmentMixin:
                     "workaround": b.workaround,
                 }
                 for b in assessment.blockers
+            ],
+            "warnings": list(assessment.warnings),
+            "sizing_by_env": [
+                {
+                    "env": es.env,
+                    "cu_min": es.cu_min,
+                    "cu_max": es.cu_max,
+                    "scale_to_zero": es.scale_to_zero,
+                    "autoscaling": es.autoscaling,
+                    "max_connections": es.max_connections,
+                    "ram_gb": es.ram_gb,
+                    "notes": es.notes,
+                }
+                for es in assessment.sizing_by_env
             ],
             "_assessment": assessment,
             "_profile": profile,
@@ -425,6 +486,7 @@ class AssessmentMixin:
             hot_tables=["orders", "order_items", "sessions", "user_events"],
             connection_count_avg=120,
             connection_count_peak=350,
+            workload_source="mock",
         )
 
     def _mock_discover_dynamodb(self, db_name: str) -> DatabaseProfile:
@@ -535,6 +597,139 @@ class AssessmentMixin:
             hot_tables=["Users", "Orders", "UserEvents", "Sessions"],
             connection_count_avg=80,
             connection_count_peak=250,
+            workload_source="mock",
+        )
+
+    def _mock_discover_cosmosdb(self, db_name: str) -> DatabaseProfile:
+        """Mock Azure Cosmos DB (NoSQL API) profile - document store with partition keys."""
+        tables = [
+            TableProfile("default", "Users", 2_000_000, 1_000_000_000, 2, False, False, 0),
+            TableProfile("default", "Orders", 12_000_000, 7_200_000_000, 3, False, False, 0),
+            TableProfile("default", "OrderItems", 35_000_000, 10_500_000_000, 1, False, False, 0),
+            TableProfile("default", "Products", 400_000, 200_000_000, 2, False, False, 0),
+            TableProfile("default", "Sessions", 6_000_000, 2_400_000_000, 1, False, False, 0),
+            TableProfile("default", "UserEvents", 80_000_000, 36_000_000_000, 2, False, False, 0),
+            TableProfile("default", "Notifications", 8_000_000, 2_400_000_000, 1, False, False, 0),
+            TableProfile("default", "Config", 1_000, 100_000, 0, False, False, 0),
+        ]
+        total_size = sum(t.size_bytes for t in tables)
+        return DatabaseProfile(
+            name=db_name or "cosmosdb-account",
+            size_bytes=total_size,
+            size_gb=round(total_size / (1024**3), 2),
+            table_count=len(tables),
+            schema_count=1,
+            schemas=["default"],
+            tables=tables,
+            extensions=[],
+            functions=[],
+            triggers=[],
+            sequence_count=0,
+            materialized_view_count=0,
+            custom_type_count=0,
+            foreign_key_count=0,
+            has_logical_replication=False,
+            replication_slots=[],
+            pg_version="",
+            cosmos_throughput_mode="provisioned",
+            cosmos_ru_per_sec=4000,
+            cosmos_partition_key_paths=[
+                "/userId",
+                "/orderId",
+                "/orderId",
+                "/productId",
+                "/sessionId",
+                "/userId",
+                "/userId",
+                "/configKey",
+            ],
+            cosmos_consistency_level="Session",
+            cosmos_change_feed_enabled=False,
+            cosmos_change_feed_mode="LatestVersion",
+            cosmos_multi_region_writes=False,
+            cosmos_regions=["eastus"],
+            cosmos_container_details=[
+                {
+                    "name": "Users",
+                    "partition_key": "/userId",
+                    "ru_per_sec": 400,
+                    "indexing_policy": "consistent",
+                    "item_count": 2_000_000,
+                },
+                {
+                    "name": "Orders",
+                    "partition_key": "/orderId",
+                    "ru_per_sec": 1000,
+                    "indexing_policy": "consistent",
+                    "item_count": 12_000_000,
+                },
+                {
+                    "name": "OrderItems",
+                    "partition_key": "/orderId",
+                    "ru_per_sec": 800,
+                    "indexing_policy": "consistent",
+                    "item_count": 35_000_000,
+                },
+                {
+                    "name": "Products",
+                    "partition_key": "/productId",
+                    "ru_per_sec": 400,
+                    "indexing_policy": "consistent",
+                    "item_count": 400_000,
+                },
+                {
+                    "name": "Sessions",
+                    "partition_key": "/sessionId",
+                    "ru_per_sec": 400,
+                    "indexing_policy": "lazy",
+                    "item_count": 6_000_000,
+                },
+                {
+                    "name": "UserEvents",
+                    "partition_key": "/userId",
+                    "ru_per_sec": 600,
+                    "indexing_policy": "consistent",
+                    "item_count": 80_000_000,
+                },
+                {
+                    "name": "Notifications",
+                    "partition_key": "/userId",
+                    "ru_per_sec": 200,
+                    "indexing_policy": "consistent",
+                    "item_count": 8_000_000,
+                },
+                {
+                    "name": "Config",
+                    "partition_key": "/configKey",
+                    "ru_per_sec": 200,
+                    "indexing_policy": "none",
+                    "item_count": 1_000,
+                },
+            ],
+        )
+
+    def _mock_workload_cosmosdb(self) -> WorkloadProfile:
+        """Mock Cosmos DB workload - RU/s mapped to QPS/TPS."""
+        return WorkloadProfile(
+            total_queries=600,
+            total_calls=40_000_000,
+            reads_pct=75.0,
+            writes_pct=25.0,
+            avg_qps=2_800,
+            peak_qps=9_000,
+            avg_tps=700,
+            p99_latency_ms=12.0,
+            workload_source="mock",
+            top_queries=[
+                {"query": "ReadItem: Users (userId)", "calls": 15_000_000, "mean_ms": 3.0},
+                {"query": "Query: Orders WHERE userId=@uid", "calls": 8_000_000, "mean_ms": 6.0},
+                {"query": "CreateItem: UserEvents", "calls": 6_000_000, "mean_ms": 5.0},
+                {"query": "Query: OrderItems WHERE orderId=@oid", "calls": 4_000_000, "mean_ms": 4.0},
+                {"query": "Query: Products WHERE category=@cat (cross-partition)", "calls": 2_000_000, "mean_ms": 18.0},
+            ],
+            hot_tables=["Users", "Orders", "UserEvents", "Sessions"],
+            connection_count_avg=60,
+            connection_count_peak=200,
         )
 
     def _mock_discover_rds(self, db_name: str) -> DatabaseProfile:
@@ -1027,3 +1222,64 @@ class AssessmentMixin:
         except Exception as e:
             logger.error(f"Live workload profiling failed: {e}")
             return self._mock_workload()
+
+    def _live_discover_cosmosdb(
+        self, endpoint: str, database: str, user: str = "", password: str = "",
+        subscription_id: str = "", resource_group: str = "",
+    ) -> DatabaseProfile:
+        """Connect to a live Cosmos DB account and discover its schema/configuration."""
+        try:
+            from agents.provisioning.cosmos_adapter import CosmosDiscoveryAdapter
+        except ImportError:
+            logger.warning("azure-cosmos not installed - returning CosmosDB mock data")
+            return self._mock_discover_cosmosdb(database)
+
+        try:
+            adapter = CosmosDiscoveryAdapter(
+                endpoint=endpoint,
+                key=password,
+                database_name=database,
+                subscription_id=subscription_id or None,
+                resource_group=resource_group or None,
+            )
+            return adapter.discover()
+        except Exception as e:
+            logger.error(f"Live CosmosDB discover failed: {e}")
+            return self._mock_discover_cosmosdb(database)
+
+    def _live_workload_cosmosdb(self, profile_data: dict) -> WorkloadProfile:
+        """Build a heuristic workload profile from discovered CosmosDB container throughput data.
+
+        Workload metrics are estimated from provisioned RU/s, not observed usage.
+        The workload_source field is set to "heuristic" to surface this caveat.
+        """
+        profile = profile_data.get("_profile") if profile_data else None
+        if not profile or not profile.databases:
+            logger.warning("No profile data for CosmosDB workload - returning mock data")
+            return self._mock_workload_cosmosdb()
+
+        db = profile.databases[0]
+        total_ru = db.cosmos_ru_per_sec or 0
+        container_count = db.table_count or 1
+
+        avg_qps = total_ru * 0.7
+        avg_tps = total_ru * 0.3
+        peak_qps = avg_qps * 3
+        connection_avg = container_count * 8
+        connection_peak = container_count * 25
+
+        return WorkloadProfile(
+            total_queries=int(avg_qps * 86400),
+            total_calls=int((avg_qps + avg_tps) * 86400),
+            reads_pct=70.0,
+            writes_pct=30.0,
+            avg_qps=round(avg_qps, 1),
+            peak_qps=round(peak_qps, 1),
+            avg_tps=round(avg_tps, 1),
+            p99_latency_ms=10.0,
+            top_queries=[],
+            hot_tables=[],
+            connection_count_avg=int(connection_avg),
+            connection_count_peak=int(connection_peak),
+            workload_source="heuristic",
+        )

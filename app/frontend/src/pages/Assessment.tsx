@@ -20,6 +20,14 @@ import {
   FormControlLabel,
   Switch,
   Divider,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  ToggleButton,
+  ToggleButtonGroup,
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import StorageIcon from "@mui/icons-material/Storage";
@@ -27,6 +35,7 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import WarningIcon from "@mui/icons-material/Warning";
 import ErrorIcon from "@mui/icons-material/Error";
 import HistoryIcon from "@mui/icons-material/History";
+import ComputerIcon from "@mui/icons-material/Computer";
 import DataTable from "../components/DataTable";
 import GanttChart from "../components/GanttChart";
 import ExtensionMatrix from "../components/ExtensionMatrix";
@@ -44,9 +53,10 @@ const ENGINE_LABELS: Record<string, string> = {
   "alloydb-postgresql": "AlloyDB PG",
   "supabase-postgresql": "Supabase PG",
   "dynamodb": "DynamoDB",
+  "cosmosdb-nosql": "Cosmos DB",
 };
 
-const NOSQL_ENGINES = new Set(["dynamodb"]);
+const NOSQL_ENGINES = new Set(["dynamodb", "cosmosdb-nosql"]);
 
 function severityColor(severity: string): "error" | "warning" | "info" | "success" {
   switch (severity) {
@@ -80,6 +90,8 @@ export default function Assessment() {
     region: "us-east-1",
     source_user: "",
     source_password: "",
+    subscription_id: "",
+    resource_group: "",
   });
 
   const [discover, setDiscover] = useState<any>(null);
@@ -90,6 +102,7 @@ export default function Assessment() {
   const [extMatrix, setExtMatrix] = useState<any>(null);
   const [costEstimate, setCostEstimate] = useState<any>(null);
   const [availableRegions, setAvailableRegions] = useState<{value: string; label: string}[]>([]);
+  const [tier, setTier] = useState<string>("premium");
 
   const { data: history, refetch: refetchHistory } = useApiData<any[]>("/api/assessment/history");
 
@@ -131,11 +144,12 @@ export default function Assessment() {
     []
   );
 
-  const fetchEnrichments = useCallback(async (profileId: string) => {
+  const fetchEnrichments = useCallback(async (profileId: string, selectedTier?: string) => {
+    const t = selectedTier || tier;
     const urls = [
       `/api/assessment/timeline/${profileId}`,
       `/api/assessment/extension-matrix/${profileId}`,
-      `/api/assessment/cost-estimate/${profileId}`,
+      `/api/assessment/cost-estimate/${profileId}?tier=${t}`,
     ];
     const results = await Promise.allSettled(
       urls.map((u) => fetch(u).then((r) => (r.ok ? r.json() : null)))
@@ -143,7 +157,7 @@ export default function Assessment() {
     if (results[0].status === "fulfilled") setTimeline(results[0].value);
     if (results[1].status === "fulfilled") setExtMatrix(results[1].value);
     if (results[2].status === "fulfilled") setCostEstimate(results[2].value);
-  }, []);
+  }, [tier]);
 
   const runDiscover = async () => {
     const result = await callApi("discover", { ...form, mock: mockMode });
@@ -209,6 +223,15 @@ export default function Assessment() {
     setExtMatrix(null);
     setCostEstimate(null);
     setError(null);
+  };
+
+  const handleTierChange = (_: any, newTier: string | null) => {
+    if (newTier && discover?.profile_id) {
+      setTier(newTier);
+      fetch(`/api/assessment/cost-estimate/${discover.profile_id}?tier=${newTier}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => d && setCostEstimate(d));
+    }
   };
 
   return (
@@ -280,7 +303,8 @@ export default function Assessment() {
                 select
                 SelectProps={{ native: true }}
               >
-                <option value="aurora-postgresql">Aurora PostgreSQL</option>
+                <option value="aurora-postgresql">Aurora PostgreSQL (Standard)</option>
+                <option value="aurora-postgresql-io">Aurora PostgreSQL (I/O-Optimized)</option>
                 <option value="rds-postgresql">RDS PostgreSQL</option>
                 <option value="cloud-sql-postgresql">Cloud SQL PostgreSQL</option>
                 <option value="azure-postgresql">Azure PostgreSQL</option>
@@ -288,6 +312,7 @@ export default function Assessment() {
                 <option value="alloydb-postgresql">AlloyDB PostgreSQL</option>
                 <option value="supabase-postgresql">Supabase PostgreSQL</option>
                 <option value="dynamodb">Amazon DynamoDB</option>
+                <option value="cosmosdb-nosql">Azure Cosmos DB (NoSQL)</option>
               </TextField>
               <TextField
                 fullWidth
@@ -325,6 +350,32 @@ export default function Assessment() {
                     size="small"
                     sx={{ mb: 2 }}
                   />
+                  {form.source_engine === "cosmosdb-nosql" && (
+                    <>
+                      <Divider sx={{ my: 1 }} />
+                      <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: "block" }}>
+                        Optional - needed for backup policy detection
+                      </Typography>
+                      <TextField
+                        fullWidth
+                        label="Azure Subscription ID"
+                        placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                        value={form.subscription_id}
+                        onChange={(e) => setForm({ ...form, subscription_id: e.target.value })}
+                        size="small"
+                        sx={{ mb: 2 }}
+                      />
+                      <TextField
+                        fullWidth
+                        label="Azure Resource Group"
+                        placeholder="my-resource-group"
+                        value={form.resource_group}
+                        onChange={(e) => setForm({ ...form, resource_group: e.target.value })}
+                        size="small"
+                        sx={{ mb: 2 }}
+                      />
+                    </>
+                  )}
                 </>
               )}
               <Button
@@ -407,7 +458,59 @@ export default function Assessment() {
                   </Grid>
                 </Grid>
 
-                {NOSQL_ENGINES.has(form.source_engine) ? (
+                {form.source_engine === "cosmosdb-nosql" ? (
+                  <Grid container spacing={2} sx={{ mt: 1 }}>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Throughput
+                      </Typography>
+                      <Typography>{discover.cosmos_throughput_mode ?? "N/A"}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        RU/s
+                      </Typography>
+                      <Typography>{discover.cosmos_ru_per_sec ?? 0}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Consistency
+                      </Typography>
+                      <Typography>{discover.cosmos_consistency_level ?? "N/A"}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Change Feed
+                      </Typography>
+                      <Typography>
+                        {discover.cosmos_change_feed_mode
+                          || (discover.cosmos_change_feed_enabled ? "AllVersionsAndDeletes" : "LatestVersion")}
+                      </Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Backup Policy
+                      </Typography>
+                      <Typography>
+                        {discover.cosmos_backup_policy
+                          ? discover.cosmos_backup_policy.charAt(0).toUpperCase() + discover.cosmos_backup_policy.slice(1)
+                          : "Unknown"}
+                      </Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Multi-Region
+                      </Typography>
+                      <Typography>{discover.cosmos_multi_region_writes ? "Yes" : "No"}</Typography>
+                    </Grid>
+                    <Grid item xs={4} sm={2}>
+                      <Typography variant="caption" color="text.secondary">
+                        Regions
+                      </Typography>
+                      <Typography>{(discover.cosmos_regions || []).length}</Typography>
+                    </Grid>
+                  </Grid>
+                ) : NOSQL_ENGINES.has(form.source_engine) ? (
                   <Grid container spacing={2} sx={{ mt: 1 }}>
                     <Grid item xs={4} sm={2}>
                       <Typography variant="caption" color="text.secondary">
@@ -661,24 +764,115 @@ export default function Assessment() {
                   </Accordion>
                 )}
 
-                {/* Warnings */}
+                {/* Migration Warnings */}
                 {readiness.warnings && readiness.warnings.length > 0 && (
-                  <Accordion>
+                  <Accordion defaultExpanded>
                     <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                       <WarningIcon color="warning" sx={{ mr: 1 }} />
                       <Typography>
-                        Warnings ({readiness.warnings.length})
+                        Migration Warnings ({readiness.warnings.length})
                       </Typography>
                     </AccordionSummary>
                     <AccordionDetails>
                       {readiness.warnings.map((w: string, i: number) => (
-                        <Alert key={i} severity="warning" sx={{ mb: 1 }}>
+                        <Alert
+                          key={i}
+                          severity={
+                            w.toLowerCase().includes("no direct") || w.toLowerCase().includes("requires")
+                              ? "warning"
+                              : "info"
+                          }
+                          sx={{ mb: 1 }}
+                        >
                           {w}
                         </Alert>
                       ))}
                     </AccordionDetails>
                   </Accordion>
                 )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Environment Sizing Recommendations */}
+          {readiness?.sizing_by_env && readiness.sizing_by_env.length > 0 && (
+            <Card sx={{ mb: 2 }}>
+              <CardContent>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
+                  <ComputerIcon color="primary" />
+                  <Typography variant="h6">Environment Sizing</Typography>
+                  <ToggleButtonGroup
+                    value={tier}
+                    exclusive
+                    onChange={handleTierChange}
+                    size="small"
+                    sx={{ ml: "auto" }}
+                  >
+                    <ToggleButton value="premium">Premium</ToggleButton>
+                    <ToggleButton value="enterprise">Enterprise</ToggleButton>
+                  </ToggleButtonGroup>
+                </Box>
+                <TableContainer>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Environment</TableCell>
+                        <TableCell align="right">CU Range</TableCell>
+                        <TableCell align="right">RAM</TableCell>
+                        <TableCell align="right">Max Connections</TableCell>
+                        <TableCell align="center">Scale-to-Zero</TableCell>
+                        <TableCell align="center">Autoscaling</TableCell>
+                        <TableCell>Notes</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {readiness.sizing_by_env.map((env: any) => (
+                        <TableRow key={env.env}>
+                          <TableCell>
+                            <Chip
+                              label={env.env.toUpperCase()}
+                              size="small"
+                              color={env.env === "prod" ? "error" : env.env === "staging" ? "warning" : "info"}
+                              variant="outlined"
+                            />
+                          </TableCell>
+                          <TableCell align="right">
+                            <Typography variant="body2" fontWeight={600}>
+                              {env.cu_min}-{env.cu_max} CU
+                            </Typography>
+                          </TableCell>
+                          <TableCell align="right">{env.ram_gb} GB</TableCell>
+                          <TableCell align="right">{env.max_connections?.toLocaleString()}</TableCell>
+                          <TableCell align="center">
+                            <Chip
+                              label={env.scale_to_zero ? "Yes" : "No"}
+                              size="small"
+                              color={env.scale_to_zero ? "success" : "default"}
+                              variant="outlined"
+                            />
+                          </TableCell>
+                          <TableCell align="center">
+                            <Chip
+                              label={env.autoscaling ? "Yes" : "No"}
+                              size="small"
+                              color={env.autoscaling ? "success" : "default"}
+                              variant="outlined"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="caption" color="text.secondary">
+                              {env.notes}
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+                <Alert severity="info" sx={{ mt: 2, py: 0.25, "& .MuiAlert-message": { fontSize: "0.75rem" } }}>
+                  1 CU = 2 GB RAM. Autoscaling range max spread: 16 CU. Scale-to-zero reduces idle costs.
+                  Contact your Databricks account team for production sizing validation.
+                </Alert>
               </CardContent>
             </Card>
           )}
@@ -802,6 +996,11 @@ export default function Assessment() {
                 region={costEstimate.region}
                 pricingVersion={costEstimate.pricing_version}
                 disclaimer={costEstimate.disclaimer}
+                costDisclaimer={costEstimate.cost_disclaimer}
+                pricingUrls={costEstimate.pricing_urls}
+                pricingSource={costEstimate.pricing_source}
+                tierLabel={costEstimate.tier_label}
+                skuName={costEstimate.sku_name}
               />
             </Box>
           )}

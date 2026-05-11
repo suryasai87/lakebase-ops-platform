@@ -7,11 +7,7 @@ so no real Databricks or Lakebase connections are attempted.
 
 from __future__ import annotations
 
-import importlib
-import importlib.machinery
-import importlib.util
 import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -21,36 +17,6 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-# Patch config/settings.py if AlertSeverity was removed from it
-# (GAP-014: duplicate enum was deleted but config/__init__.py still references it).
-# We must inject the symbol BEFORE config package __init__.py is loaded.
-
-# Load config.settings DIRECTLY (bypassing config/__init__.py) using file path.
-_settings_path = str(Path(__file__).resolve().parent.parent / "config" / "settings.py")
-_spec = importlib.util.spec_from_file_location("config.settings", _settings_path)
-_settings_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_settings_mod)
-
-if not hasattr(_settings_mod, "AlertSeverity"):
-    from enum import Enum
-
-    class _AlertSeverityShim(Enum):
-        INFO = "info"
-        WARNING = "warning"
-        CRITICAL = "critical"
-
-    _settings_mod.AlertSeverity = _AlertSeverityShim
-
-# Register in sys.modules BEFORE config/__init__.py tries to import it.
-sys.modules["config.settings"] = _settings_mod
-# Also register the config package as a namespace so subsequent imports work.
-if "config" not in sys.modules:
-    _config_pkg = types.ModuleType("config")
-    _config_pkg.__path__ = [str(Path(__file__).resolve().parent.parent / "config")]
-    _config_pkg.__package__ = "config"
-    sys.modules["config"] = _config_pkg
-
-# Now safe to import everything else.
 from config.settings import AlertThresholds  # noqa: E402
 from framework.agent_framework import AgentFramework  # noqa: E402
 from utils.alerting import AlertManager  # noqa: E402
@@ -106,24 +72,21 @@ def framework():
 def provisioning_agent(mock_client, mock_writer, mock_alerts):
     from agents.provisioning.agent import ProvisioningAgent
 
-    agent = ProvisioningAgent(mock_client, mock_writer, mock_alerts)
-    return agent
+    return ProvisioningAgent(mock_client, mock_writer, mock_alerts)
 
 
 @pytest.fixture
 def performance_agent(mock_client, mock_writer, mock_alerts):
     from agents.performance.agent import PerformanceAgent
 
-    agent = PerformanceAgent(mock_client, mock_writer, mock_alerts)
-    return agent
+    return PerformanceAgent(mock_client, mock_writer, mock_alerts)
 
 
 @pytest.fixture
 def health_agent(mock_client, mock_writer, mock_alerts):
     from agents.health.agent import HealthAgent
 
-    agent = HealthAgent(mock_client, mock_writer, mock_alerts)
-    return agent
+    return HealthAgent(mock_client, mock_writer, mock_alerts)
 
 
 # ---------------------------------------------------------------------------

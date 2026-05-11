@@ -14,6 +14,7 @@ from enum import Enum
 
 class SourceEngine(Enum):
     AURORA_POSTGRESQL = "aurora-postgresql"
+    AURORA_POSTGRESQL_IO = "aurora-postgresql-io"
     RDS_POSTGRESQL = "rds-postgresql"
     CLOUD_SQL_POSTGRESQL = "cloud-sql-postgresql"
     AZURE_POSTGRESQL = "azure-postgresql"
@@ -22,11 +23,14 @@ class SourceEngine(Enum):
     SUPABASE_POSTGRESQL = "supabase-postgresql"
     AURORA_MYSQL = "aurora-mysql"
     DYNAMODB = "dynamodb"
+    COSMOSDB_NOSQL = "cosmosdb-nosql"
 
 
 ENGINE_KIND: dict[str, str] = {
     "dynamodb": "nosql",
+    "cosmosdb-nosql": "nosql",
     "aurora-postgresql": "pg",
+    "aurora-postgresql-io": "pg",
     "rds-postgresql": "pg",
     "cloud-sql-postgresql": "pg",
     "azure-postgresql": "pg",
@@ -119,6 +123,7 @@ class WorkloadProfile:
     hot_tables: list = field(default_factory=list)
     connection_count_avg: int = 0
     connection_count_peak: int = 0
+    workload_source: str = "observed"  # "observed" | "heuristic" | "mock"
 
 
 @dataclass
@@ -157,6 +162,18 @@ class DatabaseProfile:
     global_table_regions: list[str] | None = None
     item_size_avg_bytes: int | None = None
     dynamo_table_details: list[dict] | None = None
+    # CosmosDB-specific (None for non-CosmosDB engines)
+    cosmos_throughput_mode: str | None = None
+    cosmos_ru_per_sec: int | None = None
+    cosmos_partition_key_paths: list[str] | None = None
+    cosmos_consistency_level: str | None = None
+    cosmos_change_feed_enabled: bool | None = None
+    cosmos_change_feed_mode: str | None = None  # "LatestVersion" | "AllVersionsAndDeletes"
+    cosmos_multi_region_writes: bool | None = None
+    cosmos_regions: list[str] | None = None
+    cosmos_container_details: list[dict] | None = None
+    cosmos_autoscale_max_ru: int | None = None
+    cosmos_backup_policy: str | None = None
 
 
 # ── Assessment Results ─────────────────────────────────────────────────────
@@ -181,6 +198,38 @@ class DimensionScore:
     blockers: list[Blocker] = field(default_factory=list)
 
 
+CU_TO_MAX_CONNECTIONS: dict[float, int] = {
+    0.5: 104, 1: 209, 2: 419, 3: 629, 4: 839, 5: 1049,
+    6: 1258, 7: 1468, 8: 1678, 9: 1888, 10: 2098, 12: 2517,
+    14: 2937, 16: 3357, 24: 4000, 28: 4000, 32: 4000,
+}
+
+
+def max_connections_for_cu(cu: float) -> int:
+    """Return the max_connections for a given CU size based on official specs."""
+    if cu in CU_TO_MAX_CONNECTIONS:
+        return CU_TO_MAX_CONNECTIONS[cu]
+    best = 104
+    for cu_val, conns in sorted(CU_TO_MAX_CONNECTIONS.items()):
+        if cu_val <= cu:
+            best = conns
+    return best
+
+
+@dataclass
+class EnvironmentSizing:
+    """Sizing recommendation for a specific environment (dev/staging/prod)."""
+    env: str
+    cu_min: float
+    cu_max: float
+    scale_to_zero: bool
+    autoscaling: bool
+    max_connections: int
+    ram_gb: float = 0.0
+    estimated_monthly_cost_usd: float | None = None
+    notes: str = ""
+
+
 @dataclass
 class AssessmentResult:
     overall_score: float = 0.0
@@ -194,6 +243,7 @@ class AssessmentResult:
     recommended_tier: LakebaseTier = LakebaseTier.AUTOSCALING
     recommended_cu_min: int = 1
     recommended_cu_max: int = 8
+    sizing_by_env: list[EnvironmentSizing] = field(default_factory=list)
 
 
 # ── Migration Blueprint ────────────────────────────────────────────────────
